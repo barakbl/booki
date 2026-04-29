@@ -1,0 +1,32 @@
+# sync.py
+requests>=2.31.0
+trafilatura>=1.12.0            # page content extraction for --enrich
+
+# sources/youtube.py — install only if you use [sources.youtube]
+# google-api-python-client>=2.120.0
+# google-auth-oauthlib>=1.2.0
+
+# plugins/rss — install only if you use [sources.rss]
+# feedparser>=6.0.0
+
+# ingest.py
+chromadb>=0.5.0
+sentence-transformers>=2.2.0   # local embeddings (embeddings.provider = "local")
+
+# chat.py — install only what you need based on llm.provider in config.toml
+anthropic>=0.30.0              # llm.provider = "claude"
+# openai>=1.0.0                # llm.provider = "openai" or embeddings.provider = "openai"
+# ollama uses requests (already installed above)
+
+# web.py
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+
+# exporter.py + exporter plugins — themed exports + YAML configs
+jinja2>=3.1.0
+pyyaml>=6.0
+
+# download.py — optional, only if you download videos locally.
+# Requires ffmpeg on PATH for muxing + audio extraction.
+# yt-dlp>=2024.8.0

@@ -1,0 +1,288 @@
+# Booki — example configuration.
+#
+# Copy this file to `config.toml` and edit. The dispatcher reads `config.toml`
+# from the project root by default; pass `--config other.toml` to use another.
+#
+# Every section is optional — sensible defaults kick in when a key is missing.
+# Plugins (sources, enrichers, exporters) are enabled by being installed and
+# disabled per-instance via `disabled = true` in their subtable.
+#
+# Conventions in this file:
+#   • paths starting with `./` resolve from the project root
+#   • paths starting with `~/` expand to the user's home directory
+#   • environment variables (e.g. `$OPENAI_API_KEY`) are NOT auto-substituted —
+#     either set them in the environment or paste the value here
+
+# ─── Where bookmarks live ───────────────────────────────────────────────────
+
+[bookmarks]
+# Directory of one-Markdown-file-per-item — Booki's source of truth.
+dir = "./bookmarks"
+
+# Skip items below this importance score when ingesting (0 = index everything).
+# Useful when you have hundreds of low-signal items and want chat to focus on
+# what you actually starred.
+min_importance = 0
+
+
+# ─── Vector index ───────────────────────────────────────────────────────────
+
+[vector_db]
+# Only "chromadb" is supported today.
+type        = "chromadb"
+persist_dir = "./db"
+collection  = "bookmarks"
+
+
+# ─── Embeddings ─────────────────────────────────────────────────────────────
+
+[embeddings]
+# `local` keeps everything offline (sentence-transformers, ~80 MB on first run).
+# `openai` uses OpenAI's API and needs OPENAI_API_KEY in the environment.
+provider     = "local"
+local_model  = "all-MiniLM-L6-v2"          # solid default; fast on CPU
+openai_model = "text-embedding-3-small"    # if provider = "openai"
+# openai_api_key = ""                      # falls back to $OPENAI_API_KEY
+
+
+# ─── LLM (used for enrichment + Ask answers) ────────────────────────────────
+
+[llm]
+# `ollama` runs entirely locally — install Ollama and pull a model.
+# `claude` uses Anthropic's API and needs `pip install anthropic` + ANTHROPIC_API_KEY.
+# `openai` uses OpenAI's API and needs `pip install openai` + OPENAI_API_KEY.
+provider  = "ollama"
+model     = "llama3.2:3b"                  # any model installed in your provider
+base_url  = "http://localhost:11434"       # ollama only — ignored otherwise
+n_results = 5                              # how many bookmarks to retrieve per Ask
+
+# Common models per provider:
+#   ollama : llama3.2:3b · qwen2.5:7b · mistral · gemma2
+#   claude : claude-sonnet-4-6 · claude-haiku-4-5-20251001
+#   openai : gpt-4o-mini · gpt-4o
+
+
+# ─── Web UI ─────────────────────────────────────────────────────────────────
+
+[web]
+host   = "127.0.0.1"      # bind to 0.0.0.0 to expose on your LAN
+port   = 8765
+reload = false            # uvicorn auto-reload — dev only
+
+
+# ─── Logging ────────────────────────────────────────────────────────────────
+# Applies to both CLI commands and the web server. The Manage tab > Logs
+# sub-panel reads from the file path below.
+
+[logs]
+level         = "INFO"               # DEBUG | INFO | WARNING | ERROR
+console       = "human"              # "human" | "json" | "off"
+file          = "./logs/booki.log"   # "" disables file logging
+file_format   = "json"               # JSON keeps logs grep-able + parseable
+max_bytes     = 10_485_760           # 10 MB before rotating
+backup_count  = 5                    # keep N rotated files
+
+[logs.levels]
+# Per-logger overrides — quieten noisy libs without lowering the global level.
+"chromadb"              = "WARNING"
+"sentence_transformers" = "WARNING"
+"urllib3"               = "WARNING"
+"httpx"                 = "WARNING"
+"httpcore"              = "WARNING"
+"watchfiles"            = "WARNING"
+"trafilatura"           = "WARNING"
+"htmldate"              = "WARNING"   # trafilatura transitive dep
+"uvicorn.access"        = "INFO"
+
+
+# ─── Sources (plugins that produce items) ───────────────────────────────────
+# Each [sources.<name>] subtable configures one source plugin. A source with
+# no subtable still runs with built-in defaults — write a section only when
+# you want to override something or set `disabled = true`.
+
+[sources.chrome]
+# (no options — auto-detects the default Chrome profile)
+
+[sources.safari]
+# (no options — on macOS, Terminal needs Full Disk Access to read Safari)
+
+[sources.firefox]
+# (no options — reads the most recently-modified Firefox profile)
+# disabled = true                    # uncomment to skip this source entirely
+
+[sources.youtube]
+# Pulls subscriptions / liked / recent uploads from your YouTube account.
+# Setup:
+#   1. pip install google-api-python-client google-auth-oauthlib
+#   2. Google Cloud Console → create an OAuth "Desktop app" client with the
+#      YouTube Data API v3 enabled.
+#   3. Download the JSON; save it at the path below.
+#   4. First sync opens a browser for consent and caches the token.
+client_secret = "~/.booki/youtube-client-secret.json"
+token_path    = "~/.booki/youtube-token.json"
+
+fetch_subscriptions        = true       # one Item(kind=channel) per subscription
+fetch_liked                = true       # liked videos (watched=true, liked=true)
+fetch_subscription_uploads = true       # recent uploads from each subscribed channel
+uploads_per_channel        = 10
+max_liked                  = 500        # cap; the LL playlist can be huge
+# watch_history_json = "~/Downloads/Takeout/YouTube/history/watch-history.json"
+#   Optional: a Google Takeout export. Items present here get watched=true.
+
+[sources.rss]
+# Add one [[sources.rss.feeds]] block per feed. Re-fetch is idempotent —
+# tags / notes / importance on individual items are preserved.
+#   Requires: pip install feedparser
+max_items_per_feed = 100                # 0 = unlimited
+
+[[sources.rss.feeds]]
+url   = "https://hnrss.org/frontpage"
+title = "Hacker News — front page"      # optional; overrides the feed's <title>
+tags  = ["tech"]                        # optional; written to feed_tags
+
+# [[sources.rss.feeds]]
+# url   = "https://www.theverge.com/rss/index.xml"
+# title = "The Verge"
+# tags  = ["tech", "news"]
+
+[sources.directory]
+# Local filesystem folders as a source. Every matching file becomes one item
+# with kind=file and a file:// URL. User edits (tags / notes / importance)
+# survive re-syncs; missing files are flagged `removed_from_source: true`.
+state_dir = "./bookmarks"               # where last-fetch state is persisted
+
+[[sources.directory.dirs]]
+path      = "~/Documents/notes"
+patterns  = ["*.md", "*.txt"]           # filename globs; no path separators
+recursive = true
+# title   = "My notes"                  # optional folder label
+
+# [[sources.directory.dirs]]
+# path      = "~/papers"
+# patterns  = ["*.pdf"]
+# recursive = false
+
+
+# ─── Smart lists ────────────────────────────────────────────────────────────
+# Virtual lists defined as queries over your bookmark frontmatter. They show
+# up in the web sidebar (⚡ icon) and as a "Smart" tab in the export wizard.
+# Edits take effect on the next page refresh — no restart.
+#
+# Each [smart_list.<name>] block is a set of predicates AND'd together.
+#   • bare value      → equality
+#   • ">= 7" / "< X"  → comparison (also "<=", "!=", ">", "<")
+#   • list value      → any-of
+#
+# Field aliases: synced_at → last_sync, created_at → date_bookmarked,
+#                enriched_at → last_enriched.
+
+# [smart_list.recent]
+# label     = "Added this month"
+# icon      = "🆕"
+# created_at = ">= 2026-04-01"
+
+# [smart_list.high_importance]
+# label      = "Starred"
+# importance = ">= 7"
+
+# [smart_list.youtube_unwatched]
+# source  = "youtube"
+# kind    = "video"
+# watched = false
+# order   = "synced_at desc"
+
+
+# ─── Exclusion rules ────────────────────────────────────────────────────────
+# Applied to every item before it gets written, regardless of source.
+
+[exclude]
+# domains   = ["facebook.com", "twitter.com", "x.com"]   # suffix-matched
+# url_regex = ["/login", "[?&]utm_"]                     # re.search against URL
+
+
+# ─── Downloads (yt-dlp media files) ─────────────────────────────────────────
+# The web UI's "⬇ mp4" / "🎵 mp3" buttons and the offline_archive exporter
+# both use this. Files land under <dir>/<uploader>/<title> [<id>].<ext>.
+
+[downloads]
+dir              = "./downloads"
+video_height_max = 1080            # cap on mp4 resolution
+write_subs       = true            # save .srt (auto + manual)
+write_thumbnail  = true            # save .jpg cover next to the video
+sub_langs        = "en.*"          # yt-dlp wildcard — English + variants
+
+
+# ─── Export wizard paths ────────────────────────────────────────────────────
+
+[export]
+configs_dir   = "./exports/configs"     # saved selections + exporter options
+artifacts_dir = "./exports/artifacts"   # generated artifacts
+themes_dir    = "./themes"              # user-installed exporter themes
+
+
+# ─── LLM enrichment (booki sync --enrich) ───────────────────────────────────
+
+[enrichment]
+enabled           = true
+max_content_chars = 4000          # truncate fetched page content before the LLM
+fetch_timeout     = 15            # seconds per URL fetch
+llm_timeout       = 120           # seconds per summarization call
+# llm_model = "llama3.2:3b"       # override [llm].model just for enrichment
+# base_url  = "http://localhost:11434"
+
+[enrichment.exiftool]
+# Image files (kind=file with .jpg / .png / .heic / .tiff / camera-raw extensions)
+# can be EXIF/IPTC/XMP-extracted; metadata is stored under `image_metadata` in
+# frontmatter and fed to the LLM so summaries can reference camera / lens /
+# location / shot date.
+#   Install: brew install exiftool   |   apt install libimage-exiftool-perl
+enabled = false
+binary  = "exiftool"
+timeout = 30
+# fields = []                     # override the default field list (Group:Tag)
+
+
+# ─── Metadata enrichers (booki sync --enrich-meta) ──────────────────────────
+# Per-URL classifiers that add cross-cutting `sources` tags, promote `kind`,
+# and fill in plugin-specific frontmatter (stars, duration, document_type, …).
+# Each enricher records its own `<slug>_last_enriched` for cooldown skipping;
+# pass `--all` to lift the cooldown.
+
+[enrichers.github]
+# Detects github.com/<owner>/<repo> URLs and writes
+# stars / forks / topics / languages / contributors / archived / pushed_at.
+# Without a token you get the 60 req/h public limit; with one, 5000 req/h.
+# token            = ""                # falls back to $GITHUB_TOKEN
+# max_contributors = 5
+# timeout          = 10                # seconds per HTTP request
+# cooldown_days    = 7
+# disabled         = true
+
+[enrichers.youtube]
+# Detects YouTube video / channel URLs (regardless of which source produced
+# the item) and writes channel / duration / view_count / thumbnail / language.
+# Uses yt-dlp — no API key needed.
+# timeout       = 30                   # seconds per yt-dlp extract
+# cooldown_days = 7
+# disabled      = true
+
+[enrichers.photo]
+# Tags items as kind=photo by URL extension or known photo-host pattern.
+# Defaults cover JPG/PNG/WebP/HEIC/AVIF + every common camera-raw format
+# (Fuji RAF, Canon CR2/CR3, Nikon NEF, Sony ARW, Adobe DNG, Olympus ORF, …).
+# cooldown_days = 30
+# extensions    = []                   # empty = all defaults
+# hosts         = []                   # empty = all defaults
+# disabled      = true
+
+[enrichers.document]
+# Tags items as kind=document for PDF / Word / OpenOffice / ebook / Markdown
+# / plain-text / CSV. Also contributes the Documents tab to the web UI.
+# `types` restricts which formats to recognize; empty / omitted = all known.
+# Known type slugs: pdf · doc · docx · odt · rtf · pages
+#                 · epub · mobi · azw3
+#                 · md · txt · rst · org · tex
+#                 · csv · tsv
+# types         = ["pdf", "docx", "epub", "md"]
+# cooldown_days = 30
+# disabled      = true

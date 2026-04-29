@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d12">
+<title>Booki — Bookmarks</title>
+<link rel="stylesheet" href="/static/styles.css?v=30">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E📚%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">📚</div>
+    <div>
+      <h1>Booki</h1>
+      <p class="sub" id="countLine">Loading…</p>
+    </div>
+  </div>
+  <form class="add-link" id="addLinkForm" autocomplete="off">
+    <input id="addLinkUrl" type="url" inputmode="url" placeholder="Add link (URL)…"
+           autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button type="submit" class="btn" id="addLinkBtn" title="Add link">＋</button>
+  </form>
+  <button type="button" class="btn header-export" id="openExportBtn"
+          title="Export selected items">⬇ Export</button>
+</header>
+
+<nav class="tabs" id="tabBar" role="tablist" aria-label="Sections"></nav>
+
+<section class="tab-panel" data-panel="search">
+
+<section class="search-wrap">
+  <div class="search-box" id="findBox">
+    <span class="search-icon">🔎</span>
+    <input id="findInput" type="search" autocomplete="off" autocapitalize="off"
+           autocorrect="off" spellcheck="false"
+           placeholder="Search title or URL… (press /)">
+    <button type="button" class="switch" id="fuzzyToggle"
+            title="Fuzzy mode: match characters in order (fzf-style)"
+            role="switch" aria-checked="false">
+      <span class="switch-track"><span class="switch-thumb"></span></span>
+      <span class="switch-label">Fuzzy</span>
+      <span class="switch-state" id="fuzzyState">off</span>
+    </button>
+    <span class="hint" id="hintFind">↑↓ preview · ↵ open · e edit</span>
+  </div>
+
+  <details class="adv-search" id="advSearch">
+    <summary>
+      <span class="adv-caret" aria-hidden="true">▸</span>
+      <span class="adv-title">Advanced</span>
+      <span class="adv-count hidden" id="advCount" title="Active filters">0</span>
+      <button type="button" class="adv-clear hidden" id="advClear"
+              title="Clear all advanced filters">✕ Clear</button>
+    </summary>
+    <div class="adv-grid">
+      <div class="adv-group">
+        <h4>Tags <span class="hint-text">(any)</span></h4>
+        <div id="advTags" class="chip-picker"></div>
+      </div>
+      <div class="adv-group">
+        <h4>Lists <span class="hint-text">(any)</span></h4>
+        <div id="advLists" class="chip-picker"></div>
+      </div>
+      <div class="adv-group">
+        <h4>Sources <span class="hint-text">(any)</span></h4>
+        <div id="advSources" class="chip-picker"></div>
+      </div>
+      <div class="adv-group">
+        <h4>Kinds <span class="hint-text">(any)</span></h4>
+        <div id="advKinds" class="chip-picker"></div>
+      </div>
+      <div class="adv-group adv-misc">
+        <h4>Other</h4>
+        <div class="adv-row">
+          <label>Importance ≥
+            <input type="number" id="advImpMin" min="0" max="10" step="1" placeholder="0">
+          </label>
+          <label>≤
+            <input type="number" id="advImpMax" min="0" max="10" step="1" placeholder="10">
+          </label>
+          <label class="toggle"><input type="checkbox" id="advHasSummary"> has summary</label>
+          <label class="toggle"><input type="checkbox" id="advHasNotes"> has notes</label>
+          <label class="toggle"><input type="checkbox" id="advIncludeRemoved" checked> include removed</label>
+        </div>
+      </div>
+    </div>
+  </details>
+
+  <div class="search-box hidden" id="askBox">
+    <span class="search-icon">✨</span>
+    <input id="askInput" type="search" autocomplete="off"
+           placeholder="Ask a question about your bookmarks… (↵ to submit)">
+    <label class="toggle">
+      <input type="checkbox" id="useLlm" checked> LLM
+    </label>
+  </div>
+</section>
+
+<main id="main">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-card">
+      <div class="sidebar-head">
+        <span class="sidebar-kbd">📊</span>
+        <h3>Status</h3>
+      </div>
+      <dl class="stat-grid">
+        <div class="stat"><dt>Items</dt><dd id="statTotal">—</dd></div>
+        <div class="stat"><dt>Enriched</dt><dd id="statEnriched">—</dd></div>
+        <div class="stat"><dt>Sources</dt><dd id="statSources">—</dd></div>
+        <div class="stat"><dt>Last sync</dt><dd id="statLastSync">—</dd></div>
+      </dl>
+    </div>
+
+    <div class="sidebar-card">
+      <div class="sidebar-head">
+        <span class="sidebar-kbd">🔌</span>
+        <h3>By source</h3>
+      </div>
+      <ul class="bar-list" id="statBySource"></ul>
+    </div>
+
+    <div class="sidebar-card">
+      <div class="sidebar-head">
+        <span class="sidebar-kbd">🧩</span>
+        <h3>By kind</h3>
+      </div>
+      <ul class="bar-list" id="statByKind"></ul>
+    </div>
+
+    <div class="sidebar-card">
+      <div class="sidebar-head">
+        <span class="sidebar-kbd">📋</span>
+        <h3>Lists</h3>
+        <button type="button" class="list-clear hidden" id="listFilterClear"
+                title="Clear list filter">✕</button>
+      </div>
+      <ul class="bar-list clickable" id="statLists"></ul>
+    </div>
+
+    <p class="sidebar-foot" id="statDir"></p>
+  </aside>
+
+  <div class="main-content">
+    <ul id="results" class="results"></ul>
+
+    <section id="askResult" class="ask-result hidden">
+      <div id="askStatus" class="ask-status"></div>
+      <article id="askAnswer" class="ask-answer"></article>
+      <h3 class="ask-sources-heading">Sources</h3>
+      <ul id="askSources" class="results"></ul>
+    </section>
+
+    <p id="empty" class="empty hidden">No matches.</p>
+  </div>
+</main>
+
+</section><!-- /tab-panel[search] -->
+
+<div id="tabPanels"></div>
+
+<aside id="drawer" class="drawer hidden" aria-hidden="true">
+  <div class="drawer-inner">
+    <button class="drawer-close" id="drawerClose" aria-label="Close">✕</button>
+    <div class="detail-header">
+      <img class="detail-fav" id="detailFav" alt="">
+      <div class="detail-title-block">
+        <h2 id="detailTitle"></h2>
+        <a id="detailUrl" class="detail-url" target="_blank" rel="noopener"></a>
+      </div>
+    </div>
+
+    <div class="detail-meta">
+      <span class="chip" id="detailImp"></span>
+      <span class="chip" id="detailStatus"></span>
+      <span class="chip" id="detailPath"></span>
+    </div>
+
+    <div class="detail-actions">
+      <a id="detailOpen" class="btn primary" target="_blank" rel="noopener">Open ↗</a>
+      <button class="btn" id="detailEdit">Edit metadata</button>
+      <button class="btn hidden" id="detailDlVideo">⬇️ mp4</button>
+      <button class="btn hidden" id="detailDlAudio">🎵 mp3</button>
+    </div>
+
+    <section class="detail-section" id="secSummary">
+      <h3>Summary</h3>
+      <p id="detailSummary"></p>
+    </section>
+
+    <section class="detail-section" id="secNotes">
+      <h3>Notes</h3>
+      <p id="detailNotes"></p>
+    </section>
+
+    <section class="detail-section" id="secTags">
+      <h3>Tags</h3>
+      <div id="detailTags" class="tag-list"></div>
+    </section>
+
+    <section class="detail-section" id="secLists">
+      <h3>Lists</h3>
+      <div id="detailLists" class="tag-list"></div>
+      <form class="list-add" id="listAddForm" autocomplete="off">
+        <input id="listAddInput" type="text" list="listSuggestions"
+               placeholder="Add to list… (type name, ↵)" autocapitalize="off"
+               autocorrect="off" spellcheck="false">
+        <datalist id="listSuggestions"></datalist>
+        <button type="submit" class="btn">＋</button>
+      </form>
+    </section>
+
+    <section class="detail-section" id="secKeywords">
+      <h3>Keywords</h3>
+      <div id="detailKeywords" class="tag-list"></div>
+    </section>
+
+    <section class="detail-section hidden" id="secExtras">
+      <div id="detailExtras"></div>
+    </section>
+
+    <section class="detail-section" id="secDates">
+      <h3>Details</h3>
+      <dl class="kv">
+        <dt>Source</dt><dd id="detailSource"></dd>
+        <dt>Bookmarked</dt><dd id="detailBookmarked"></dd>
+        <dt>Last sync</dt><dd id="detailLastsync"></dd>
+        <dt>Archive</dt><dd id="detailArchive"></dd>
+        <dt>File</dt><dd id="detailFile"></dd>
+      </dl>
+    </section>
+  </div>
+</aside>
+
+<div id="editModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-inner">
+    <header>
+      <h2>Edit bookmark</h2>
+      <button class="drawer-close" id="editClose" aria-label="Close">✕</button>
+    </header>
+    <form id="editForm">
+      <label>Title
+        <input type="text" name="title" id="editTitle">
+      </label>
+      <label>Importance (0–10)
+        <input type="range" name="importance" id="editImp" min="0" max="10">
+        <span class="range-val" id="editImpVal">0</span>
+      </label>
+      <label>Tags (comma-separated)
+        <input type="text" name="tags" id="editTags" placeholder="ai, tools, python">
+      </label>
+      <label>Summary
+        <textarea name="summary" id="editSummary" rows="3"></textarea>
+      </label>
+      <label>Notes
+        <textarea name="notes" id="editNotes" rows="4"></textarea>
+      </label>
+      <label>Keywords (comma-separated)
+        <input type="text" name="keywords" id="editKeywords">
+      </label>
+      <div class="form-actions">
+        <button type="button" class="btn" id="editCancel">Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+    <p id="editStatus" class="edit-status"></p>
+  </div>
+</div>
+
+<div id="exportModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-inner export-modal">
+    <header>
+      <h2>Export wizard</h2>
+      <div class="export-head-actions">
+        <select id="exportLoadConfig" title="Load a saved export config">
+          <option value="">Load saved…</option>
+        </select>
+        <button class="drawer-close" id="exportClose" aria-label="Close">✕</button>
+      </div>
+    </header>
+
+    <section class="export-section">
+      <h3>1. Select items <span class="export-count" id="exportCount">0 items</span></h3>
+      <div class="export-tabs">
+        <button type="button" class="export-tab active" data-tab="lists">Lists</button>
+        <button type="button" class="export-tab" data-tab="smart">Smart</button>
+        <button type="button" class="export-tab" data-tab="tags">Tags</button>
+        <button type="button" class="export-tab" data-tab="filter">Filter</button>
+        <button type="button" class="export-tab" data-tab="manual">Manual</button>
+      </div>
+
+      <div class="export-tab-panel active" data-panel="lists">
+        <p class="hint-text">Items in ANY picked list are included.</p>
+        <div id="selLists" class="chip-picker"></div>
+      </div>
+
+      <div class="export-tab-panel" data-panel="smart">
+        <p class="hint-text">Items matching ANY picked smart list are included. Defined in config.toml.</p>
+        <div id="selSmartLists" class="chip-picker"></div>
+      </div>
+
+      <div class="export-tab-panel" data-panel="tags">
+        <p class="hint-text">Items with ANY picked tag are included.</p>
+        <div id="selTags" class="chip-picker"></div>
+      </div>
+
+      <div class="export-tab-panel" data-panel="filter">
+        <p class="hint-text">Include items matching ALL these predicates.</p>
+        <div class="filter-grid">
+          <label>Source
+            <select id="selFilterSource"><option value="">(any)</option></select>
+          </label>
+          <label>Kind
+            <select id="selFilterKind"><option value="">(any)</option></select>
+          </label>
+          <label>Min importance
+            <input type="number" id="selFilterImpMin" min="0" max="10" step="1" placeholder="0">
+          </label>
+          <label>Max importance
+            <input type="number" id="selFilterImpMax" min="0" max="10" step="1" placeholder="10">
+          </label>
+        </div>
+      </div>
+
+      <div class="export-tab-panel" data-panel="manual">
+        <p class="hint-text">Search and click items to add them individually.</p>
+        <input type="search" id="selManualSearch" placeholder="Search title or URL…"
+               autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <ul id="selManualResults" class="manual-results"></ul>
+        <div class="picked-head">Picked individually:</div>
+        <div id="selManualPicked" class="chip-picker"></div>
+      </div>
+    </section>
+
+    <section class="export-section">
+      <h3>2. Exporter</h3>
+      <div class="exporter-row">
+        <select id="exporterSelect"></select>
+        <span class="hint-text" id="exporterDesc"></span>
+      </div>
+      <label class="theme-row hidden" id="themeRow">Theme
+        <select id="themeSelect"></select>
+      </label>
+    </section>
+
+    <section class="export-section">
+      <h3>3. Options</h3>
+      <div id="exporterOptions" class="options-grid"></div>
+    </section>
+
+    <section class="export-section">
+      <h3>4. Run</h3>
+      <div class="run-row">
+        <label>Export name
+          <input type="text" id="exportName" placeholder="e.g. weekly-ai-digest">
+        </label>
+        <label class="save-config">
+          <input type="checkbox" id="saveConfigCheck"> Save this configuration
+        </label>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn" id="previewBtn">Preview</button>
+        <button type="button" class="btn primary" id="runBtn">Run & Download</button>
+      </div>
+      <p id="exportStatus" class="edit-status"></p>
+    </section>
+
+    <section class="export-section export-preview hidden" id="previewSection">
+      <div class="preview-head">
+        <h3>Preview</h3>
+        <button type="button" class="btn preview-reset hidden" id="previewResetBtn"
+                title="Discard inline edits">↺ Reset edits</button>
+      </div>
+      <p class="hint-text preview-edit-hint">Hover over the title, footer, or any link's title / summary / notes — click the pencil to edit. Enter saves, Esc cancels.</p>
+      <div id="previewHost" class="preview-host"></div>
+      <pre id="previewText" class="preview-text hidden"></pre>
+    </section>
+  </div>
+</div>
+
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/static/app.js?v=30"></script>
+</body>
+</html>

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<link rel="stylesheet" href="styles.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;1,9..144,400&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<div class="page">
+<header class="page-header">
+  <div class="brand-dot" aria-hidden="true">
+    <svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="cup" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0" stop-color="#b4885e"/>
+          <stop offset="1" stop-color="#3e2716"/>
+        </linearGradient>
+      </defs>
+      <path d="M8 14h18a5 5 0 0 1 0 10h-1.2a8 8 0 0 1-7.8 7h-2a8 8 0 0 1-8-8V14zm18 3v4a2 2 0 0 0 0-4z" fill="url(#cup)"/>
+      <path d="M13 7c1.2 1.5-1.2 3 0 4.5M18 6c1.4 1.7-1.4 3.2 0 5M23 7c1.2 1.5-1.2 3 0 4.5"
+            stroke="#8a6241" stroke-width="1.6" stroke-linecap="round" fill="none" opacity=".75"/>
+    </svg>
+  </div>
+  <h1 data-edit-key="title">{{ title }}</h1>
+  <p class="count">
+    <span class="count-num">{{ item_count }}</span>
+    <span class="count-word">curated sip{{ 's' if item_count != 1 else '' }}</span>
+  </p>
+</header>
+
+<div class="search">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+  <input id="q" type="search" placeholder="filter your brew…" autocomplete="off" spellcheck="false">
+</div>
+
+<main id="main">
+{% for group in groups %}
+  {% if group.label %}
+  <div class="group-head">
+    <h2 class="group-label">{{ group.label }}</h2>
+    <span class="group-rule" aria-hidden="true"></span>
+    <span class="group-count">{{ group.entries | length }}</span>
+  </div>
+  {% endif %}
+  <ul class="link-list">
+    {% for it in group.entries %}
+    {% set _host = (it.url.split('/')[2] if '://' in it.url else it.url) %}
+    <li class="link-item"
+        data-item-id="{{ it.id }}"
+        data-title="{{ (it.title or it.url) | lower }}"
+        data-summary="{{ (it.summary or '') | lower }}"
+        data-host="{{ _host | lower }}"
+        data-tags="{{ (it.tags or []) | join(' ') | lower }}">
+      <a class="link-card" href="{{ it.url }}" target="_blank" rel="noopener">
+        <span class="link-arrow" aria-hidden="true">↗</span>
+        <div class="link-card-row">
+          <span class="link-favicon" aria-hidden="true"
+                data-fallback="{{ (_host | replace('www.', ''))[:1] | upper or '•' }}">
+            <img loading="lazy" alt="" src="https://www.google.com/s2/favicons?sz=64&domain={{ _host }}"
+                 onerror="var p=this.parentNode;p.innerHTML='';var s=document.createElement('span');s.className='fav-fallback';s.textContent=p.dataset.fallback;p.appendChild(s);">
+          </span>
+
+          <div class="link-body">
+            <div class="link-title" data-edit-key="link.title" dir="auto">{{ it.title or it.url }}</div>
+            <div class="link-host">{{ _host | replace('www.', '') }}</div>
+
+            {% if include_summary and it.summary %}
+            <p class="link-summary" data-edit-key="link.summary" dir="auto">{{ it.summary }}</p>
+            {% endif %}
+
+            {% if include_notes and it.notes %}
+            <p class="link-notes" dir="auto"><span class="label">Notes</span> <span data-edit-key="link.notes">{{ it.notes }}</span></p>
+            {% endif %}
+
+            <div class="link-meta">
+              {% if it.importance %}
+              <span class="chip chip-imp" title="Importance {{ it.importance }}/10">
+                <span class="star">★</span> {{ it.importance }}
+              </span>
+              {% endif %}
+              {% if it.source %}<span class="chip chip-src">{{ it.source }}</span>{% endif %}
+              {% if it.kind and it.kind != "bookmark" %}<span class="chip chip-kind">{{ it.kind }}</span>{% endif %}
+              {% if include_tags and it.tags %}
+                {% for t in it.tags %}<span class="chip chip-tag">#{{ t }}</span>{% endfor %}
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+{% endfor %}
+<div class="empty" id="empty" hidden>no matches — try another sip.</div>
+</main>
+
+<footer class="page-footer">
+  <span class="footer-mark">☕</span>
+  <small data-edit-key="footer">{{ footer }}</small>
+</footer>
+</div>
+
+<script>
+(() => {
+  const q = document.getElementById('q');
+  if (!q) return;
+  const items = Array.from(document.querySelectorAll('.link-item'));
+  const empty = document.getElementById('empty');
+  const groupHeads = Array.from(document.querySelectorAll('.group-head'));
+  const lists = Array.from(document.querySelectorAll('.link-list'));
+
+  let t;
+  q.addEventListener('input', () => {
+    clearTimeout(t);
+    t = setTimeout(() => {
+      const v = q.value.trim().toLowerCase();
+      let visible = 0;
+      items.forEach(li => {
+        const hit = !v ||
+          li.dataset.title.includes(v) ||
+          li.dataset.summary.includes(v) ||
+          li.dataset.host.includes(v) ||
+          li.dataset.tags.includes(v);
+        li.hidden = !hit;
+        if (hit) visible++;
+      });
+      // Hide empty group heads / lists so the page doesn't show stray labels.
+      lists.forEach(ul => {
+        const anyVisible = Array.from(ul.children).some(c => !c.hidden);
+        ul.hidden = !anyVisible;
+      });
+      groupHeads.forEach(h => {
+        const nextList = h.nextElementSibling;
+        h.hidden = !nextList || nextList.hidden;
+      });
+      empty.hidden = visible > 0;
+    }, 80);
+  });
+})();
+</script>
+</body>
+</html>
