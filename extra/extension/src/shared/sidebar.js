@@ -1,7 +1,5 @@
-// Booki side panel — fzf-style picker.
-//
-// Fetch is delegated to the background service worker (it owns the cache).
-// On Enter we navigate the active tab. Cmd/Ctrl+Enter opens a new tab.
+// Picker UI — runs both in Chrome's side panel and Firefox's sidebar.
+// Both browsers expose `chrome.*`, so the same code works unchanged.
 
 const KIND_GLYPH = {
   bookmark: "🔖",
@@ -27,47 +25,45 @@ const els = {
 };
 
 const state = {
-  items: [],          // raw items from /api/bookmarks
-  filtered: [],       // post-filter list rendered in the UI
+  items: [],
+  filtered: [],
   kinds: ["bookmark"],
   fuzzy: true,
   selected: 0,
 };
 
-// ─── Search algorithms ─────────────────────────────────────────────────────
-// Substring is a simple includes(); fuzzy is a port of the project's existing
-// fzf-ish scorer (chars in order, contiguous wins, anchored wins more).
-
 function substringMatch(q, text) {
-  if (!q) return { score: 1, matches: [] };
+  if (!q) return { score: 1 };
   const idx = (text || "").toLowerCase().indexOf(q);
   if (idx < 0) return null;
-  const matches = [];
-  for (let i = 0; i < q.length; i++) matches.push(idx + i);
-  return { score: q.length / (text.length + 1), matches };
+  return { score: q.length / (text.length + 1) };
 }
 
 function fuzzyMatch(q, text) {
-  if (!q) return { score: 1, matches: [] };
+  if (!q) return { score: 1 };
   const t = (text || "").toLowerCase();
   let qi = 0, lastHit = -2, score = 0;
-  const matches = [];
   for (let i = 0; i < t.length && qi < q.length; i++) {
     if (t[i] === q[qi]) {
-      matches.push(i);
       let bonus = 1;
-      if (i === 0 || /[\s\-_/.:]/.test(t[i - 1])) bonus += 2;        // anchored
-      if (i === lastHit + 1) bonus += 2;                              // contiguous
+      if (i === 0 || /[\s\-_/.:]/.test(t[i - 1])) bonus += 2;
+      if (i === lastHit + 1) bonus += 2;
       score += bonus;
       lastHit = i;
       qi++;
     }
   }
   if (qi !== q.length) return null;
-  return { score: score / (t.length + 1), matches };
+  return { score: score / (t.length + 1) };
 }
 
-// ─── Render ────────────────────────────────────────────────────────────────
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+function setStatus(text) { els.status.textContent = text; }
 
 function render() {
   const q = els.search.value.trim().toLowerCase();
@@ -123,16 +119,6 @@ function render() {
   });
 }
 
-function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>"']/g, c => (
-    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
-  ));
-}
-
-function setStatus(text) { els.status.textContent = text; }
-
-// ─── Open ──────────────────────────────────────────────────────────────────
-
 async function openSelected(where) {
   const b = state.filtered[state.selected];
   if (!b?.url) return;
@@ -142,7 +128,6 @@ async function openSelected(where) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab) await chrome.tabs.update(tab.id, { url: b.url });
   }
-  // Side panel intentionally stays open after a navigation — user may pick another.
 }
 
 function moveSelection(delta) {
@@ -152,11 +137,8 @@ function moveSelection(delta) {
   els.results.querySelectorAll(".row").forEach((li, i) => {
     li.classList.toggle("active", i === state.selected);
   });
-  const active = els.results.querySelector(".row.active");
-  active?.scrollIntoView({ block: "nearest" });
+  els.results.querySelector(".row.active")?.scrollIntoView({ block: "nearest" });
 }
-
-// ─── Loading ───────────────────────────────────────────────────────────────
 
 async function load(force = false) {
   setStatus("Loading…");
@@ -184,19 +166,19 @@ async function loadSettings() {
   els.modeBtn.textContent = state.fuzzy ? "fuzzy" : "substring";
 }
 
-// ─── Wiring ────────────────────────────────────────────────────────────────
-
 els.search.addEventListener("input", render);
 els.search.addEventListener("keydown", (e) => {
   if (e.key === "ArrowDown") { e.preventDefault(); moveSelection(1); }
   else if (e.key === "ArrowUp") { e.preventDefault(); moveSelection(-1); }
-  else if (e.key === "Enter") { e.preventDefault(); openSelected(e.metaKey || e.ctrlKey ? "new" : "current"); }
-  else if (e.key === "Escape") {
+  else if (e.key === "Enter") {
+    e.preventDefault();
+    openSelected(e.metaKey || e.ctrlKey ? "new" : "current");
+  } else if (e.key === "Escape") {
     if (els.search.value) { els.search.value = ""; render(); }
   }
 });
 
-els.modeBtn.addEventListener("click", async () => {
+els.modeBtn.addEventListener("click", () => {
   state.fuzzy = !state.fuzzy;
   els.modeBtn.textContent = state.fuzzy ? "fuzzy" : "substring";
   chrome.storage.sync.set({ fuzzy: state.fuzzy });
@@ -218,9 +200,7 @@ els.openOptions.addEventListener("click", () => chrome.runtime.openOptionsPage()
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "sync") return;
-  if (changes.kinds || changes.fuzzy) {
-    loadSettings().then(render);
-  }
+  if (changes.kinds || changes.fuzzy) loadSettings().then(render);
 });
 
 (async () => {

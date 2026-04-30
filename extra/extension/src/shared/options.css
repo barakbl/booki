@@ -24,30 +24,15 @@ main {
   border: 1px solid var(--border);
   border-radius: 10px;
 }
-h1 {
-  margin: 0 0 20px;
-  font-size: 20px;
-}
-h2 {
-  font-size: 14px;
-  margin: 0 0 8px;
-  color: var(--text);
-}
+h1 { margin: 0 0 20px; font-size: 20px; }
+h2 { font-size: 14px; margin: 0 0 8px; }
 section {
   padding: 16px 0;
   border-bottom: 1px solid var(--border);
 }
 section:last-of-type { border-bottom: none; }
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.label {
-  font-size: 13px;
-  color: var(--text-dim);
-}
+.field { display: flex; flex-direction: column; gap: 6px; }
+.label { font-size: 13px; color: var(--text-dim); }
 input[type="text"] {
   width: 100%;
   padding: 8px 10px;
@@ -57,18 +42,8 @@ input[type="text"] {
   background: #fff;
 }
 input[type="text"]:focus { border-color: var(--accent); outline: none; }
-.hint {
-  font-size: 12px;
-  color: var(--text-dim);
-  margin: 0;
-}
-
-.kinds {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
-}
+.hint { font-size: 12px; color: var(--text-dim); margin: 0; }
+.kinds { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .check {
   display: inline-flex;
   align-items: center;
@@ -80,17 +55,8 @@ input[type="text"]:focus { border-color: var(--accent); outline: none; }
   font-size: 13px;
   user-select: none;
 }
-.check input {
-  margin: 0;
-  accent-color: var(--accent);
-}
-
-footer {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding-top: 16px;
-}
+.check input { margin: 0; accent-color: var(--accent); }
+footer { display: flex; align-items: center; gap: 12px; padding-top: 16px; }
 button {
   padding: 8px 16px;
   font: inherit;
@@ -105,10 +71,7 @@ button.primary {
   color: #fff;
 }
 button:hover { filter: brightness(0.97); }
-.status {
-  font-size: 13px;
-  color: var(--text-dim);
-}
+.status { font-size: 13px; color: var(--text-dim); }
 .status.ok { color: var(--ok); }
 .status.err { color: var(--err); }
 code {

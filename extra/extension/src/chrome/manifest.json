@@ -16,11 +16,11 @@
     "default_title": "Booki — Open picker"
   },
   "background": {
-    "service_worker": "background.js",
+    "service_worker": "platform.js",
     "type": "module"
   },
   "side_panel": {
-    "default_path": "sidepanel.html"
+    "default_path": "sidebar.html"
   },
   "options_ui": {
     "page": "options.html",

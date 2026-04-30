@@ -18,7 +18,7 @@ Booki pulls items from **pluggable sources** — Chrome / Safari / Firefox bookm
 - **🧬 Metadata enrichers** — pluggable per-URL classifiers that promote items to a richer `kind` (`photo`, `video`, `channel`, `document`, …) and tag a cross-cutting `sources` list. Built-ins: GitHub repos, YouTube videos / channels, photos, documents (PDF / docx / md / epub / …).
 - **🔎 Semantic search** — finds items by meaning, not keywords. Cross-language too — English queries match Hebrew titles.
 - **⚡ fzf-powered terminal browser** — `booki browse` opens an instant, fuzzy-matchable picker over your whole library with a live preview pane. Enter to open in your browser, `Ctrl-Y` to copy, `Ctrl-E` to edit the underlying `.md`. No embedding model, no startup cost.
-- **🧩 Chrome extension** — a side-panel picker for your Booki items (Alt+Shift+B by default) with fuzzy search and Enter-to-open, plus right-click "Add to Booki" for any link, page, or image. See [`extra/chrome_extention/`](extra/chrome_extention/README.md).
+- **🧩 Browser extension** (Chrome + Firefox) — a side-panel / sidebar picker for your Booki items (Alt+Shift+B by default) with fuzzy search and Enter-to-open, plus right-click "Add to Booki" for any link, page, or image. See [`extra/extension/`](extra/extension/README.md).
 - **🤖 LLM answers** — asks an AI to synthesize an answer over the retrieved items.
 - **🔗 Dead link detection** — flags broken bookmarks and suggests Wayback Machine archives.
 - **📤 Pluggable exporters** — turn a selection into a themed HTML page, an offline ZIP (full pages + downloaded videos), a JSON dump, an LLM-ready prompt, or a browser-importable bookmarks file.
@@ -88,7 +88,7 @@ After sourcing, drop the leading `./` — `booki sync`, `booki chat "..."`, etc.
 - [`docs/plugins.md`](docs/plugins.md) — the built-in sources, enrichers, exporters, and tab contributions.
 - [`docs/plugins_dev.md`](docs/plugins_dev.md) — write your own source / enricher / exporter / tab plugin.
 - [`docs/web.md`](docs/web.md) — the tab-based web UI and its JSON API.
-- [`extra/chrome_extention/README.md`](extra/chrome_extention/README.md) — the Chrome extension: side-panel picker + right-click "Add to Booki".
+- [`extra/extension/README.md`](extra/extension/README.md) — the browser extension (Chrome + Firefox) — side-panel / sidebar picker + right-click "Add to Booki".
 - [`config.toml.example`](config.toml.example) — fully-commented reference config.
 - [`CHANGELOG.md`](CHANGELOG.md) — release history.
 

@@ -1,9 +1,8 @@
-// Options page — host URL + which kinds to include in the picker.
+// Options page — host URL + which kinds to show in the picker.
 // Available kinds are inferred from the live bookmarks list.
 
 const els = {
   host: document.getElementById("hostUrl"),
-  hostHint: document.getElementById("hostHint"),
   kinds: document.getElementById("kinds"),
   save: document.getElementById("save"),
   test: document.getElementById("test"),
@@ -11,9 +10,14 @@ const els = {
 };
 
 const FALLBACK_KINDS = ["bookmark", "video", "channel", "photo", "document", "github", "file", "podcast", "article"];
-
 let availableKinds = [...FALLBACK_KINDS];
 let selectedKinds = new Set(["bookmark"]);
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
 
 function renderKinds() {
   els.kinds.innerHTML = "";
@@ -33,8 +37,8 @@ function renderKinds() {
   }
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function joinUrl(base, path) {
+  return base.replace(/\/+$/, "") + path;
 }
 
 async function loadKindsFromBooki(hostUrl) {
@@ -43,18 +47,12 @@ async function loadKindsFromBooki(hostUrl) {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const items = await r.json();
     const set = new Set(FALLBACK_KINDS);
-    for (const it of items) {
-      if (it.kind) set.add(String(it.kind));
-    }
+    for (const it of items) if (it.kind) set.add(String(it.kind));
     availableKinds = [...set].sort();
   } catch {
     availableKinds = [...FALLBACK_KINDS];
   }
   renderKinds();
-}
-
-function joinUrl(base, path) {
-  return base.replace(/\/+$/, "") + path;
 }
 
 async function load() {
@@ -69,13 +67,9 @@ async function load() {
 
 els.save.addEventListener("click", async () => {
   const hostUrl = els.host.value.trim().replace(/\/+$/, "") || "http://127.0.0.1:8765";
-  await chrome.storage.sync.set({
-    hostUrl,
-    kinds: [...selectedKinds],
-  });
+  await chrome.storage.sync.set({ hostUrl, kinds: [...selectedKinds] });
   els.status.textContent = "Saved.";
   els.status.className = "status ok";
-  // Invalidate cache so the new host is queried fresh.
   chrome.storage.local.remove("booki.cache").catch(() => {});
   setTimeout(() => { els.status.textContent = ""; }, 2000);
 });

@@ -1,5 +1,5 @@
-// Toast helper, injected into pages on demand by the service worker.
-// Idempotent: safe to inject multiple times — guards on a global flag.
+// Toast helper, injected on demand by the service worker.
+// Idempotent — safe to inject multiple times into the same page.
 
 (() => {
   if (window.__bookiToastReady) return;
