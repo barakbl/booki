@@ -1232,7 +1232,8 @@ Tabs.register({
   id: "search", label: "Search", icon: "🔎", order: 10,
   // Search panel is pre-rendered in index.html — mount is a no-op.
   mount() {},
-  onShow() { els.findInput?.focus?.(); },
+  onShow() { els.findInput?.focus?.(); refreshExportButton(); },
+  getSelection: () => ({ kind: "any", ids: idsFromContainer("#results") }),
 });
 
 Tabs.register({
@@ -1282,7 +1283,9 @@ Tabs.register({
   onShow() {
     renderPhotoGrid();
     document.getElementById("photoFindInput")?.focus();
+    refreshExportButton();
   },
+  getSelection: () => ({ kind: "photo", ids: idsFromContainer("#photoGrid") }),
 });
 
 function isPhotoBookmark(b) {
@@ -1457,7 +1460,9 @@ Tabs.register({
   onShow() {
     renderVideoGrid();
     document.getElementById("videoFindInput")?.focus();
+    refreshExportButton();
   },
+  getSelection: () => ({ kind: "video", ids: idsFromContainer("#videoGrid") }),
 });
 
 function isVideoBookmark(b) {
@@ -1599,7 +1604,10 @@ Tabs.register({
       root.appendChild(els.askResult);
     }
   },
-  onShow() { els.askInput?.focus?.(); },
+  onShow() { els.askInput?.focus?.(); refreshExportButton(); },
+  // Ask tab renders into the same #askSources <ul class="results"> below the
+  // synthesized answer; that's the export selection.
+  getSelection: () => ({ kind: "any", ids: idsFromContainer("#askSources") }),
 });
 
 Tabs.register({
@@ -1616,6 +1624,7 @@ Tabs.register({
           <button type="button" class="subtab active" data-subtab="status">🩺 Doctor</button>
           <button type="button" class="subtab" data-subtab="info">📊 General</button>
           <button type="button" class="subtab" data-subtab="plugins">🔌 Plugins</button>
+          <button type="button" class="subtab" data-subtab="tasks">✈️ Tasks</button>
           <button type="button" class="subtab" data-subtab="logs">📜 Logs</button>
         </nav>
 
@@ -1646,6 +1655,15 @@ Tabs.register({
           </div>
         </section>
 
+        <section class="subtab-panel" data-subpanel="tasks">
+          <div class="subtab-actions">
+            <button type="button" class="btn manage-refresh" id="tasksRefresh">↻ Refresh</button>
+          </div>
+          <div id="manageTasks">
+            <p class="hint-text">Loading…</p>
+          </div>
+        </section>
+
         <section class="subtab-panel" data-subpanel="logs">
           <div class="logs-toolbar">
             <select id="logsFile" title="Log file"></select>
@@ -1671,6 +1689,8 @@ Tabs.register({
 
     document.getElementById("pluginsRefresh")
             ?.addEventListener("click", loadManagePlugins);
+    document.getElementById("tasksRefresh")
+            ?.addEventListener("click", refreshManageTasks);
 
     initManageLogs();
 
@@ -1687,7 +1707,7 @@ Tabs.register({
     // refresh lazily when activated (see setManageSubtab).
     runManageSubtabLoader(_manageSubtab);
   },
-  onHide() { stopLogsFollow(); },
+  onHide() { stopLogsFollow(); stopTasksPoll(); },
 });
 
 let _manageSubtab = "status";
@@ -1704,6 +1724,7 @@ function setManageSubtab(id) {
   _manageSubtab = id;
   try { localStorage.setItem("booki.manage.subtab", id); } catch {}
   if (id !== "logs") stopLogsFollow();
+  if (id === "tasks") startTasksPoll(); else stopTasksPoll();
   // Lazy-load the first time; refresh-on-show is handled by onShow.
   if (!_manageSubtabLoaded.has(id)) {
     _manageSubtabLoaded.add(id);
@@ -1716,6 +1737,7 @@ function runManageSubtabLoader(id) {
     case "status":  return loadStatus();
     case "info":    return loadManageInfo();
     case "plugins": return loadManagePlugins();
+    case "tasks":   return refreshManageTasks();
     case "logs":    return refreshManageLogs();
   }
 }
@@ -1781,12 +1803,6 @@ function renderPluginGroups(d) {
     name:   e.name,
     badges: e.disabled ? [`<span class="plugin-badge warn">disabled</span>`] : [],
     sub:    e.module,
-  }))));
-
-  sections.push(pluginGroup("Exporters", d.exporters.map(e => ({
-    name:   e.label || e.name,
-    badges: e.supports_themes ? [`<span class="plugin-badge">themed</span>`] : [],
-    sub:    e.description || e.module,
   }))));
 
   sections.push(pluginGroup("Tab contributions", d.tabs.map(t => ({
@@ -2248,751 +2264,6 @@ addLinkForm?.addEventListener("submit", async (e) => {
   }
 });
 
-// ─── Export wizard ─────────────────────────────────────────────────
-//
-// Single-modal wizard: select items (lists / tags / filter / manual),
-// pick an exporter + theme, set options, preview, run. Optionally saves
-// the configuration as a YAML file under exports/configs/.
-
-const exportState = {
-  lists: new Set(),        // selected list names
-  tags: new Set(),         // selected tag names
-  filter: {},              // {source, kind, importance_min, importance_max}
-  manual: new Set(),       // selected bookmark ids
-  exporters: [],           // [{name, label, description, supports_themes, default_theme, options:[...]}]
-  current: null,           // currently selected exporter object
-  themes: [],              // [{name, label}]
-  overrides: {},           // { itemId: {title?, summary?, notes?} } — preview-only edits
-  smartLists: new Set(),   // selected smart list names
-};
-
-const expEls = {
-  open: $("openExportBtn"),
-  modal: $("exportModal"),
-  close: $("exportClose"),
-  loadConfig: $("exportLoadConfig"),
-  count: $("exportCount"),
-  selLists: $("selLists"),
-  selSmartLists: $("selSmartLists"),
-  selTags: $("selTags"),
-  selFilterSource: $("selFilterSource"),
-  selFilterKind: $("selFilterKind"),
-  selFilterImpMin: $("selFilterImpMin"),
-  selFilterImpMax: $("selFilterImpMax"),
-  selManualSearch: $("selManualSearch"),
-  selManualResults: $("selManualResults"),
-  selManualPicked: $("selManualPicked"),
-  exporterSelect: $("exporterSelect"),
-  exporterDesc: $("exporterDesc"),
-  themeRow: $("themeRow"),
-  themeSelect: $("themeSelect"),
-  options: $("exporterOptions"),
-  exportName: $("exportName"),
-  saveConfigCheck: $("saveConfigCheck"),
-  previewBtn: $("previewBtn"),
-  runBtn: $("runBtn"),
-  status: $("exportStatus"),
-  previewSection: $("previewSection"),
-  previewHost: $("previewHost"),
-  previewText: $("previewText"),
-  previewResetBtn: $("previewResetBtn"),
-};
-
-function openExport() {
-  expEls.modal.classList.remove("hidden");
-  expEls.modal.setAttribute("aria-hidden", "false");
-  refreshExporters();
-  refreshExportPickers();
-  refreshConfigsDropdown();
-}
-function closeExport() {
-  expEls.modal.classList.add("hidden");
-  expEls.modal.setAttribute("aria-hidden", "true");
-}
-expEls.open.addEventListener("click", openExport);
-expEls.close.addEventListener("click", closeExport);
-expEls.modal.addEventListener("click", (e) => {
-  if (e.target === expEls.modal) closeExport();
-});
-
-// Tabs
-document.querySelectorAll(".export-tab").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    const target = btn.dataset.tab;
-    document.querySelectorAll(".export-tab").forEach(b => b.classList.toggle("active", b === btn));
-    document.querySelectorAll(".export-tab-panel").forEach(p => {
-      p.classList.toggle("active", p.dataset.panel === target);
-    });
-  });
-});
-
-// ── Picker rendering ────────────────────────────────────────────────
-
-function refreshExportPickers() {
-  // Lists: prefer already-loaded state.lists; fall back to scanning bookmarks.
-  const listCounts = {};
-  state.all.forEach(b => (b.lists || []).forEach(l => {
-    listCounts[l] = (listCounts[l] || 0) + 1;
-  }));
-  renderChipPicker(expEls.selLists, Object.entries(listCounts).sort((a,b)=>b[1]-a[1]),
-                   exportState.lists, (name) => { toggleSet(exportState.lists, name); updateExportCount(); });
-
-  // Smart lists: pulled from /api/lists (already loaded into state.lists with smart=true).
-  const smartEntries = state.lists
-    .filter(l => l.smart)
-    .map(l => [l.name, l.count || 0]);
-  renderChipPicker(expEls.selSmartLists, smartEntries,
-                   exportState.smartLists,
-                   (name) => { toggleSet(exportState.smartLists, name); updateExportCount(); });
-
-  // Tags: union across all bookmarks.
-  const tagCounts = {};
-  state.all.forEach(b => (b.tags || []).forEach(t => {
-    tagCounts[t] = (tagCounts[t] || 0) + 1;
-  }));
-  renderChipPicker(expEls.selTags, Object.entries(tagCounts).sort((a,b)=>b[1]-a[1]),
-                   exportState.tags, (name) => { toggleSet(exportState.tags, name); updateExportCount(); });
-
-  // Filter dropdowns: source + kind derived from bookmarks.
-  const sources = new Set(), kinds = new Set();
-  state.all.forEach(b => { if (b.source) sources.add(b.source); if (b.kind) kinds.add(b.kind); });
-  fillSelect(expEls.selFilterSource, ["", ...[...sources].sort()],
-             (v) => v === "" ? "(any)" : v);
-  fillSelect(expEls.selFilterKind, ["", ...[...kinds].sort()],
-             (v) => v === "" ? "(any)" : v);
-
-  renderManualPicked();
-  updateExportCount();
-}
-
-function renderChipPicker(host, entries, selectedSet, onToggle) {
-  host.innerHTML = "";
-  if (entries.length === 0) {
-    host.innerHTML = `<span class="hint-text">Nothing available.</span>`;
-    return;
-  }
-  entries.forEach(([name, count]) => {
-    const chip = document.createElement("span");
-    chip.className = "pick" + (selectedSet.has(name) ? " selected" : "");
-    chip.innerHTML = `${escapeHtml(name)}<span class="count">${count}</span>`;
-    chip.addEventListener("click", () => {
-      onToggle(name);
-      chip.classList.toggle("selected");
-    });
-    host.appendChild(chip);
-  });
-}
-
-function fillSelect(sel, values, label) {
-  const prev = sel.value;
-  sel.innerHTML = "";
-  values.forEach(v => {
-    const o = document.createElement("option");
-    o.value = v;
-    o.textContent = label(v);
-    sel.appendChild(o);
-  });
-  if (values.includes(prev)) sel.value = prev;
-}
-
-function toggleSet(s, v) { s.has(v) ? s.delete(v) : s.add(v); }
-
-// ── Manual picker ───────────────────────────────────────────────────
-
-expEls.selManualSearch.addEventListener("input", () => {
-  const q = expEls.selManualSearch.value.trim().toLowerCase();
-  expEls.selManualResults.innerHTML = "";
-  if (!q) return;
-  const matches = state.all
-    .filter(b => b.title.toLowerCase().includes(q) || b.url.toLowerCase().includes(q))
-    .slice(0, 30);
-  matches.forEach(b => {
-    const li = document.createElement("li");
-    li.innerHTML = `<span>${escapeHtml(b.title || "(untitled)")}</span>` +
-                   `<span class="mr-url">${escapeHtml(domain(b.url))}</span>`;
-    li.addEventListener("click", () => {
-      exportState.manual.add(b.id);
-      renderManualPicked();
-      updateExportCount();
-    });
-    expEls.selManualResults.appendChild(li);
-  });
-});
-
-function renderManualPicked() {
-  expEls.selManualPicked.innerHTML = "";
-  if (exportState.manual.size === 0) {
-    expEls.selManualPicked.innerHTML = `<span class="hint-text">None picked yet.</span>`;
-    return;
-  }
-  const byId = Object.fromEntries(state.all.map(b => [b.id, b]));
-  [...exportState.manual].forEach(id => {
-    const b = byId[id];
-    if (!b) return;
-    const chip = document.createElement("span");
-    chip.className = "pick selected";
-    chip.innerHTML = `${escapeHtml(b.title || b.url)} ✕`;
-    chip.addEventListener("click", () => {
-      exportState.manual.delete(id);
-      renderManualPicked();
-      updateExportCount();
-    });
-    expEls.selManualPicked.appendChild(chip);
-  });
-}
-
-// Filter inputs → update count on change
-[expEls.selFilterSource, expEls.selFilterKind, expEls.selFilterImpMin, expEls.selFilterImpMax]
-  .forEach(el => el.addEventListener("input", () => {
-    readFilterFromInputs();
-    updateExportCount();
-  }));
-
-function readFilterFromInputs() {
-  const src = expEls.selFilterSource.value || null;
-  const kind = expEls.selFilterKind.value || null;
-  const mn = expEls.selFilterImpMin.value === "" ? null : parseInt(expEls.selFilterImpMin.value, 10);
-  const mx = expEls.selFilterImpMax.value === "" ? null : parseInt(expEls.selFilterImpMax.value, 10);
-  exportState.filter = { source: src, kind, importance_min: mn, importance_max: mx };
-}
-
-function filterIsEmpty(f) {
-  return !f || (f.source == null && f.kind == null && f.importance_min == null && f.importance_max == null);
-}
-function itemMatchesFilter(b, f) {
-  if (filterIsEmpty(f)) return false;
-  if (f.source != null && b.source !== f.source && !(b.sources || []).includes(f.source)) return false;
-  if (f.kind != null && b.kind !== f.kind) return false;
-  if (f.importance_min != null && (b.importance || 0) < f.importance_min) return false;
-  if (f.importance_max != null && (b.importance || 0) > f.importance_max) return false;
-  return true;
-}
-
-function updateExportCount() {
-  const seen = new Set();
-  // Pre-resolve picked smart-list specs.
-  const smartSpecs = [...exportState.smartLists]
-    .map(name => state.lists.find(l => l.smart && l.name === name))
-    .filter(Boolean);
-  let n = 0;
-  for (const b of state.all) {
-    const match =
-      exportState.manual.has(b.id) ||
-      (exportState.lists.size > 0 && (b.lists || []).some(l => exportState.lists.has(l))) ||
-      (exportState.tags.size > 0 && (b.tags || []).some(t => exportState.tags.has(t))) ||
-      itemMatchesFilter(b, exportState.filter) ||
-      (smartSpecs.length > 0 && smartSpecs.some(s => smartListMatches(b, s)));
-    if (!match) continue;
-    const key = (b.url || b.id).replace(/\/$/, "").toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    n += 1;
-  }
-  expEls.count.textContent = `${n} item${n === 1 ? "" : "s"}`;
-}
-
-// ── Exporters + options ─────────────────────────────────────────────
-
-async function refreshExporters() {
-  if (exportState.exporters.length === 0) {
-    const r = await fetch("/api/exporters");
-    exportState.exporters = await r.json();
-  }
-  expEls.exporterSelect.innerHTML = "";
-  exportState.exporters.forEach((e, i) => {
-    const o = document.createElement("option");
-    o.value = e.name;
-    o.textContent = e.label || e.name;
-    expEls.exporterSelect.appendChild(o);
-  });
-  if (exportState.exporters.length) {
-    expEls.exporterSelect.value = exportState.current?.name || exportState.exporters[0].name;
-    onExporterChange();
-  }
-}
-expEls.exporterSelect.addEventListener("change", onExporterChange);
-
-async function onExporterChange() {
-  const name = expEls.exporterSelect.value;
-  const cur = exportState.exporters.find(e => e.name === name);
-  exportState.current = cur;
-  expEls.exporterDesc.textContent = cur?.description || "";
-  renderExporterOptions(cur);
-
-  if (cur?.supports_themes) {
-    expEls.themeRow.classList.remove("hidden");
-    const r = await fetch(`/api/themes?exporter=${encodeURIComponent(name)}`);
-    exportState.themes = await r.json();
-    expEls.themeSelect.innerHTML = "";
-    exportState.themes.forEach(t => {
-      const o = document.createElement("option");
-      o.value = t.name;
-      o.textContent = t.label + (t.builtin ? " (built-in)" : "");
-      expEls.themeSelect.appendChild(o);
-    });
-    if (cur.default_theme && [...expEls.themeSelect.options].some(o => o.value === cur.default_theme)) {
-      expEls.themeSelect.value = cur.default_theme;
-    }
-  } else {
-    expEls.themeRow.classList.add("hidden");
-    exportState.themes = [];
-  }
-}
-
-function renderExporterOptions(exp, preset = {}) {
-  expEls.options.innerHTML = "";
-  (exp?.options || []).forEach(o => {
-    const wrap = document.createElement("div");
-    wrap.className = "opt";
-    const val = preset[o.name] !== undefined ? preset[o.name] : o.default;
-
-    if (o.type === "bool") {
-      wrap.className = "opt bool";
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.checked = !!val;
-      cb.dataset.opt = o.name;
-      cb.dataset.type = "bool";
-      const lbl = document.createElement("span");
-      lbl.textContent = o.label;
-      wrap.appendChild(cb); wrap.appendChild(lbl);
-    } else if (o.type === "select") {
-      wrap.innerHTML = `<span>${escapeHtml(o.label)}</span>`;
-      const sel = document.createElement("select");
-      sel.dataset.opt = o.name;
-      sel.dataset.type = "select";
-      (o.choices || []).forEach(c => {
-        const opt = document.createElement("option");
-        opt.value = c; opt.textContent = c;
-        sel.appendChild(opt);
-      });
-      sel.value = val ?? (o.choices || [])[0] ?? "";
-      wrap.appendChild(sel);
-    } else if (o.type === "multiselect") {
-      wrap.className = "opt full";
-      wrap.innerHTML = `<span>${escapeHtml(o.label)}</span>`;
-      const group = document.createElement("div");
-      group.className = "opt-multi";
-      const current = new Set(Array.isArray(val) ? val : []);
-      (o.choices || []).forEach(c => {
-        const chip = document.createElement("span");
-        chip.className = "pick" + (current.has(c) ? " selected" : "");
-        chip.textContent = c;
-        chip.dataset.opt = o.name;
-        chip.dataset.type = "multiselect";
-        chip.dataset.value = c;
-        chip.addEventListener("click", () => chip.classList.toggle("selected"));
-        group.appendChild(chip);
-      });
-      wrap.appendChild(group);
-    } else if (o.type === "number") {
-      wrap.innerHTML = `<span>${escapeHtml(o.label)}</span>`;
-      const inp = document.createElement("input");
-      inp.type = "number"; inp.dataset.opt = o.name; inp.dataset.type = "number";
-      if (val != null) inp.value = val;
-      wrap.appendChild(inp);
-    } else {
-      // string (default)
-      wrap.innerHTML = `<span>${escapeHtml(o.label)}</span>`;
-      const inp = document.createElement("input");
-      inp.type = "text"; inp.dataset.opt = o.name; inp.dataset.type = "string";
-      if (val != null) inp.value = val;
-      wrap.appendChild(inp);
-    }
-    if (o.help) {
-      const h = document.createElement("span");
-      h.className = "hint-text";
-      h.style.textTransform = "none";
-      h.style.letterSpacing = "normal";
-      h.textContent = o.help;
-      wrap.appendChild(h);
-    }
-    expEls.options.appendChild(wrap);
-  });
-}
-
-function collectOptions() {
-  const opts = {};
-  expEls.options.querySelectorAll("[data-opt][data-type]").forEach(el => {
-    const name = el.dataset.opt;
-    const type = el.dataset.type;
-    if (type === "bool") {
-      opts[name] = el.checked;
-    } else if (type === "number") {
-      opts[name] = el.value === "" ? null : Number(el.value);
-    } else if (type === "multiselect") {
-      if (el.classList.contains("selected")) {
-        (opts[name] ||= []).push(el.dataset.value);
-      } else if (!(name in opts)) {
-        opts[name] = opts[name] || [];
-      }
-    } else {
-      opts[name] = el.value;
-    }
-  });
-  // multiselect: ensure the key exists even if nothing was selected
-  (exportState.current?.options || []).forEach(o => {
-    if (o.type === "multiselect" && !(o.name in opts)) opts[o.name] = [];
-  });
-  return opts;
-}
-
-// ── Run / preview ───────────────────────────────────────────────────
-
-function buildRunPayload(saveConfigAs) {
-  readFilterFromInputs();
-  const opts = collectOptions();
-  if (Object.keys(exportState.overrides).length > 0) {
-    opts._overrides = exportState.overrides;
-  }
-  return {
-    exporter: exportState.current?.name,
-    theme: exportState.current?.supports_themes ? expEls.themeSelect.value : null,
-    options: opts,
-    selection: {
-      lists: [...exportState.lists],
-      tags: [...exportState.tags],
-      filters: exportState.filter,
-      manual_ids: [...exportState.manual],
-      smart_lists: [...exportState.smartLists],
-    },
-    name: (expEls.exportName.value || exportState.current?.name || "export").trim(),
-    save_config_as: saveConfigAs || null,
-  };
-}
-
-async function runExport(save) {
-  const saveAs = save ? (expEls.exportName.value || "").trim() : null;
-  if (save && !saveAs) {
-    setStatus("Enter an export name to save the configuration.", "error");
-    return null;
-  }
-  if (!exportState.current) {
-    setStatus("Pick an exporter.", "error");
-    return null;
-  }
-  setStatus("Running…");
-  const r = await fetch("/api/export/run", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildRunPayload(saveAs)),
-  });
-  if (!r.ok) {
-    const err = await r.json().catch(() => ({}));
-    setStatus(err.detail || `HTTP ${r.status}`, "error");
-    return null;
-  }
-  const data = await r.json();
-  const msg = [`${data.item_count} items → ${data.artifact_path.split("/").pop()}`];
-  if (data.config_path) msg.push(`saved config: ${data.config_path.split("/").pop()}`);
-  setStatus(msg.join(" · "), "ok");
-  return data;
-}
-
-function setStatus(msg, cls = "") {
-  expEls.status.textContent = msg;
-  expEls.status.className = "edit-status" + (cls ? " " + cls : "");
-}
-
-expEls.previewBtn.addEventListener("click", async () => {
-  const data = await runExport(false);
-  if (!data) return;
-  expEls.previewSection.classList.remove("hidden");
-  if (data.mime === "text/html" && data.preview_text != null) {
-    expEls.previewText.classList.add("hidden");
-    expEls.previewHost.classList.remove("hidden");
-    renderEditablePreview(data.preview_text);
-  } else if (data.preview_text != null) {
-    expEls.previewHost.classList.add("hidden");
-    expEls.previewText.classList.remove("hidden");
-    if (data.mime === "application/json") {
-      expEls.previewText.classList.add("preview-json");
-      expEls.previewText.innerHTML = highlightJson(data.preview_text);
-    } else {
-      expEls.previewText.classList.remove("preview-json");
-      expEls.previewText.textContent = data.preview_text;
-    }
-  } else {
-    expEls.previewHost.classList.add("hidden");
-    expEls.previewText.classList.remove("hidden");
-    expEls.previewText.classList.remove("preview-json");
-    expEls.previewText.textContent = "(no inline preview available)";
-  }
-});
-
-expEls.previewResetBtn.addEventListener("click", () => {
-  if (!confirm("Discard all inline edits to title, footer, and links?")) return;
-  exportState.overrides = {};
-  expEls.previewResetBtn.classList.add("hidden");
-  // Re-render so the user sees the original values returned by the server.
-  expEls.previewBtn.click();
-});
-
-// ── Editable preview (shadow DOM + pencil icons) ───────────────────
-
-const EDIT_STYLES = `
-  [data-edit-key] { position: relative; }
-  [data-edit-key]:hover { outline: 1px dashed rgba(124,92,255,0.55); outline-offset: 2px; cursor: text; }
-  .booki-pencil {
-    position: absolute;
-    top: -10px;
-    right: -10px;
-    width: 22px; height: 22px;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    background: #7c5cff;
-    color: white;
-    border: none;
-    border-radius: 50%;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.25);
-    cursor: pointer;
-    font-size: 11px;
-    line-height: 1;
-    padding: 0;
-    z-index: 5;
-  }
-  [data-edit-key]:hover > .booki-pencil,
-  .booki-pencil:hover { display: inline-flex; }
-  [data-edit-key][contenteditable="true"] {
-    outline: 2px solid #7c5cff;
-    outline-offset: 2px;
-    background: rgba(124,92,255,0.08);
-    cursor: text;
-  }
-  [data-edit-key][contenteditable="true"] .booki-pencil { display: none; }
-  /* link cards are inside <a>; while editing we don't want the click to navigate */
-  a[href].booki-edit-noclick { pointer-events: none; }
-  a[href] [data-edit-key] { pointer-events: auto; }
-`;
-
-function renderEditablePreview(html) {
-  const host = expEls.previewHost;
-  host.innerHTML = "";
-  // Re-attach a fresh shadow root each render. attachShadow is idempotent-once,
-  // so swap the host element if a shadow already exists.
-  let shadowHost = host;
-  if (host.shadowRoot) {
-    const fresh = host.cloneNode(false);
-    host.parentNode.replaceChild(fresh, host);
-    expEls.previewHost = fresh;
-    shadowHost = fresh;
-  }
-  const shadow = shadowHost.attachShadow({ mode: "open" });
-
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  // Pull stylesheets/styles from <head> into the shadow root so the theme renders.
-  doc.head.querySelectorAll("style, link[rel=stylesheet], meta[name=color-scheme]")
-    .forEach((el) => shadow.appendChild(el.cloneNode(true)));
-  // Inject editing affordances stylesheet.
-  const editStyle = document.createElement("style");
-  editStyle.textContent = EDIT_STYLES;
-  shadow.appendChild(editStyle);
-  // Move body children into shadow root.
-  Array.from(doc.body.children).forEach((el) => shadow.appendChild(el.cloneNode(true)));
-
-  attachEditHandlers(shadow);
-  refreshResetVisibility();
-}
-
-function refreshResetVisibility() {
-  const has = Object.keys(exportState.overrides).length > 0;
-  expEls.previewResetBtn.classList.toggle("hidden", !has);
-}
-
-function attachEditHandlers(shadow) {
-  // Stop link cards from navigating while we're editing.
-  shadow.querySelectorAll("a[href]").forEach((a) => {
-    a.addEventListener("click", (e) => {
-      const target = e.target;
-      if (target.closest && target.closest("[data-edit-key]")) {
-        e.preventDefault();
-      }
-    });
-  });
-
-  shadow.querySelectorAll("[data-edit-key]").forEach((el) => {
-    const key = el.getAttribute("data-edit-key");
-    const isMulti = key === "link.summary" || key === "link.notes";
-    // Add pencil button.
-    const pencil = document.createElement("button");
-    pencil.type = "button";
-    pencil.className = "booki-pencil";
-    pencil.title = "Edit";
-    pencil.textContent = "✎";
-    pencil.addEventListener("mousedown", (e) => e.preventDefault());
-    pencil.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      beginEdit(el, isMulti);
-    });
-    // Position parent must be relative; data-edit-key rule already handles that.
-    el.appendChild(pencil);
-
-    // Click on the element itself also begins edit (more discoverable).
-    el.addEventListener("click", (e) => {
-      if (el.getAttribute("contenteditable") === "true") return;
-      // Don't hijack clicks on the pencil itself.
-      if (e.target === pencil) return;
-      e.preventDefault();
-      e.stopPropagation();
-      beginEdit(el, isMulti);
-    });
-  });
-}
-
-function beginEdit(el, isMulti) {
-  const original = el.textContent.replace(/\s*✎\s*$/, "").trim();
-  // Strip the pencil from the editable text.
-  const pencil = el.querySelector(".booki-pencil");
-  if (pencil) pencil.remove();
-  el.setAttribute("contenteditable", "true");
-  el.textContent = original;
-  el.focus();
-  // Place cursor at end.
-  const range = document.createRange();
-  range.selectNodeContents(el);
-  range.collapse(false);
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(range);
-
-  let cancelled = false;
-
-  const finish = (commit) => {
-    if (el.getAttribute("contenteditable") !== "true") return;
-    el.removeAttribute("contenteditable");
-    el.removeEventListener("keydown", onKey);
-    el.removeEventListener("blur", onBlur);
-    const value = el.textContent.trim();
-    if (commit) {
-      saveEdit(el, value);
-    } else {
-      el.textContent = original;
-    }
-    // Re-attach the pencil for future hovers.
-    const p = document.createElement("button");
-    p.type = "button";
-    p.className = "booki-pencil";
-    p.title = "Edit";
-    p.textContent = "✎";
-    p.addEventListener("mousedown", (e) => e.preventDefault());
-    p.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      beginEdit(el, isMulti);
-    });
-    el.appendChild(p);
-  };
-
-  const onKey = (e) => {
-    if (e.key === "Escape") {
-      cancelled = true;
-      e.preventDefault();
-      finish(false);
-    } else if (e.key === "Enter" && !e.shiftKey && !isMulti) {
-      e.preventDefault();
-      finish(true);
-    }
-  };
-  const onBlur = () => {
-    if (!cancelled) finish(true);
-  };
-  el.addEventListener("keydown", onKey);
-  el.addEventListener("blur", onBlur);
-}
-
-function saveEdit(el, value) {
-  const key = el.getAttribute("data-edit-key");
-  if (key === "title") {
-    // Sync to the page-title Options input so a later run/save uses it.
-    const titleInput = expEls.options.querySelector('[data-opt="title"]');
-    if (titleInput) titleInput.value = value;
-  } else if (key === "footer") {
-    const footerInput = expEls.options.querySelector('[data-opt="footer"]');
-    if (footerInput) footerInput.value = value;
-  } else if (key === "link.title" || key === "link.summary" || key === "link.notes") {
-    const li = el.closest("[data-item-id]");
-    if (!li) return;
-    const id = li.getAttribute("data-item-id");
-    const field = key.split(".")[1];
-    exportState.overrides[id] = exportState.overrides[id] || {};
-    exportState.overrides[id][field] = value;
-  }
-  refreshResetVisibility();
-}
-
-function highlightJson(text) {
-  const escaped = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-  const re = /("(?:\\.|[^"\\])*"\s*:?)|(\b(?:true|false|null)\b)|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|([{}\[\],])/g;
-  return escaped.replace(re, (m, str, kw, num, punct) => {
-    if (str) {
-      const isKey = str.endsWith(":") || /:\s*$/.test(str);
-      const cls = isKey ? "json-key" : "json-string";
-      return `<span class="${cls}">${str}</span>`;
-    }
-    if (kw) return `<span class="json-${kw === "null" ? "null" : "bool"}">${kw}</span>`;
-    if (num) return `<span class="json-number">${num}</span>`;
-    if (punct) return `<span class="json-punct">${punct}</span>`;
-    return m;
-  });
-}
-
-expEls.runBtn.addEventListener("click", async () => {
-  const save = expEls.saveConfigCheck.checked;
-  const data = await runExport(save);
-  if (!data) return;
-  window.location.href = data.download_url;
-  if (save) refreshConfigsDropdown();
-});
-
-// ── Saved configs ───────────────────────────────────────────────────
-
-async function refreshConfigsDropdown() {
-  const r = await fetch("/api/export/configs");
-  const list = await r.json();
-  expEls.loadConfig.innerHTML = `<option value="">Load saved…</option>`;
-  list.forEach(c => {
-    const o = document.createElement("option");
-    o.value = c.name;
-    o.textContent = `${c.name} (${c.exporter})`;
-    expEls.loadConfig.appendChild(o);
-  });
-}
-
-expEls.loadConfig.addEventListener("change", async () => {
-  const name = expEls.loadConfig.value;
-  if (!name) return;
-  const r = await fetch(`/api/export/configs/${encodeURIComponent(name)}`);
-  if (!r.ok) { setStatus(`Failed to load config '${name}'`, "error"); return; }
-  const cfg = await r.json();
-
-  // Populate selection
-  exportState.lists = new Set(cfg.selection?.lists || []);
-  exportState.tags = new Set(cfg.selection?.tags || []);
-  exportState.manual = new Set(cfg.selection?.manual_ids || []);
-  exportState.smartLists = new Set(cfg.selection?.smart_lists || []);
-  const f = cfg.selection?.filters || {};
-  expEls.selFilterSource.value = f.source || "";
-  expEls.selFilterKind.value = f.kind || "";
-  expEls.selFilterImpMin.value = f.importance_min ?? "";
-  expEls.selFilterImpMax.value = f.importance_max ?? "";
-
-  // Exporter + options
-  expEls.exporterSelect.value = cfg.exporter;
-  await onExporterChange();
-  if (cfg.theme) expEls.themeSelect.value = cfg.theme;
-  renderExporterOptions(exportState.current, cfg.options || {});
-  expEls.exportName.value = cfg.name || "";
-
-  refreshExportPickers();
-  setStatus(`Loaded config: ${cfg.name}`, "ok");
-  expEls.loadConfig.value = "";
-});
-
 // ─── System status ──────────────────────────────────────────────────
 // Lives inside the Manage tab (Stage 6). Element refs are populated when
 // that tab mounts; renderStatus / loadStatus / renderCheckRow read through
@@ -3165,3 +2436,508 @@ loadKinds();
 loadSchema().then(loadBookmarks).then(loadStats).then(loadLists).catch(err => {
   els.count.textContent = `Error: ${err.message}`;
 });
+
+
+// ─── Export wizard ──────────────────────────────────────────────────
+//
+// Topbar "⬇ Export" button → right slide-out drawer → 3-step wizard:
+//   1. Pick exporter (filtered by active tab's kind; ✈️ marks background)
+//   2. Pick theme + fill theme vars (skipped when exporter declines themes)
+//   3. Fill exporter-specific options + run
+//
+// Selection comes from the active tab's getSelection() hook (declared on
+// each Tabs.register call). Tabs that don't declare one fall through to
+// the empty selection and the button stays disabled.
+
+const exportState = {
+  step: 1,                  // 1 | 2 | 3
+  kind: "any",
+  itemIds: [],
+  exporters: [],
+  selectedExporter: null,
+  themes: [],
+  selectedTheme: null,
+  themeVars: {},
+  options: {},
+};
+
+function idsFromContainer(selector) {
+  const root = document.querySelector(selector);
+  if (!root) return [];
+  return Array.from(root.querySelectorAll("[data-id]")).map(el => el.dataset.id);
+}
+
+function getActiveSelection() {
+  const id = Tabs.current();
+  if (!id) return { kind: "any", ids: [] };
+  const spec = Tabs.get(id);
+  if (spec && typeof spec.getSelection === "function") {
+    try { return spec.getSelection() || { kind: "any", ids: [] }; }
+    catch (e) { console.error(e); }
+  }
+  return { kind: "any", ids: [] };
+}
+
+function refreshExportButton() {
+  const btn = document.getElementById("openExportBtn");
+  const lbl = document.getElementById("exportBtnLabel");
+  if (!btn || !lbl) return;
+  const sel = getActiveSelection();
+  if (!sel.ids.length) {
+    btn.disabled = true;
+    lbl.textContent = "Export";
+  } else {
+    btn.disabled = false;
+    lbl.textContent = `Export ${sel.ids.length} ${sel.ids.length === 1 ? "item" : "items"}`;
+  }
+}
+
+// Re-render the button label whenever results re-render. Tabs already call
+// refreshExportButton() in their onShow; this MutationObserver covers the
+// case where a tab's filter input fires synchronous DOM updates.
+function _observeExportRoots() {
+  const roots = ["#results", "#photoGrid", "#videoGrid", "#askSources"];
+  for (const sel of roots) {
+    const node = document.querySelector(sel);
+    if (!node) continue;
+    new MutationObserver(refreshExportButton).observe(node, { childList: true });
+  }
+}
+document.addEventListener("DOMContentLoaded", _observeExportRoots);
+
+function openExport() {
+  const sel = getActiveSelection();
+  if (!sel.ids.length) return;
+  exportState.step = 1;
+  exportState.kind = sel.kind || "any";
+  exportState.itemIds = sel.ids.slice();
+  exportState.selectedExporter = null;
+  exportState.selectedTheme = null;
+  exportState.themes = [];
+  exportState.themeVars = {};
+  exportState.options = {};
+  document.getElementById("exportItemCount").textContent =
+    `· ${sel.ids.length} ${sel.ids.length === 1 ? "item" : "items"}`;
+  const drawer = document.getElementById("exportDrawer");
+  drawer.classList.remove("hidden");
+  drawer.setAttribute("aria-hidden", "false");
+  document.getElementById("exportStatus").textContent = "";
+  loadExporters().then(renderExportStep);
+}
+
+function closeExport() {
+  const drawer = document.getElementById("exportDrawer");
+  drawer.classList.add("hidden");
+  drawer.setAttribute("aria-hidden", "true");
+}
+
+async function loadExporters() {
+  const r = await fetch(`/api/export/exporters?kind=${encodeURIComponent(exportState.kind)}`);
+  exportState.exporters = r.ok ? await r.json() : [];
+}
+
+function renderExportStep() {
+  document.querySelectorAll("#exportDrawer .export-step").forEach(el => {
+    el.classList.toggle("active", el.dataset.step === String(exportState.step));
+  });
+  document.querySelectorAll("#exportStepnav .step-pill").forEach(el => {
+    el.classList.toggle("active", el.dataset.step === String(exportState.step));
+  });
+  document.getElementById("exportBackBtn").disabled = exportState.step === 1;
+  document.getElementById("exportNextBtn").textContent = exportState.step === 3 ? "▶ Run" : "Next →";
+
+  if (exportState.step === 1) renderExporterList();
+  else if (exportState.step === 2) renderThemeStep();
+  else if (exportState.step === 3) renderOptionsStep();
+}
+
+function renderExporterList() {
+  const host = document.getElementById("exporterList");
+  host.innerHTML = "";
+  if (!exportState.exporters.length) {
+    host.innerHTML = `<p class="hint-text">No exporters available for this view.</p>`;
+    return;
+  }
+  for (const e of exportState.exporters) {
+    const li = document.createElement("li");
+    li.className = "exporter-item";
+    if (exportState.selectedExporter?.slug === e.slug) li.classList.add("selected");
+    const bg = e.execution_mode === "background"
+      ? `<span class="bg-badge" title="Runs in the background">✈️</span>` : "";
+    li.innerHTML = `
+      <div class="exporter-name">${escapeHtml(e.name)} ${bg}</div>
+      <div class="exporter-desc">${escapeHtml(e.description || "")}</div>`;
+    li.addEventListener("click", () => {
+      exportState.selectedExporter = e;
+      // Reset downstream state
+      exportState.selectedTheme = null;
+      exportState.themeVars = {};
+      exportState.options = {};
+      for (const o of e.options_schema || []) {
+        if (o.default !== undefined) exportState.options[o.name] = o.default;
+      }
+      renderExporterList();
+    });
+    host.appendChild(li);
+  }
+}
+
+async function renderThemeStep() {
+  const e = exportState.selectedExporter;
+  const list = document.getElementById("themeList");
+  const vars_ = document.getElementById("themeVars");
+  if (!e) return;
+  if (!e.uses_themes) {
+    list.innerHTML = `<p class="hint-text">No theme for this exporter.</p>`;
+    vars_.innerHTML = "";
+    return;
+  }
+  if (!exportState.themes.length) {
+    const r = await fetch(`/api/export/themes?exporter=${encodeURIComponent(e.slug)}`);
+    exportState.themes = r.ok ? await r.json() : [];
+  }
+  if (!exportState.themes.length) {
+    list.innerHTML = `<p class="hint-text">No themes installed for this exporter.</p>`;
+    vars_.innerHTML = "";
+    return;
+  }
+  if (!exportState.selectedTheme) {
+    exportState.selectedTheme = exportState.themes[0];
+    exportState.themeVars = {};
+    for (const v of exportState.selectedTheme.vars || []) {
+      exportState.themeVars[v.name] = v.default;
+    }
+  }
+  list.innerHTML = "";
+  for (const t of exportState.themes) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "theme-item";
+    if (exportState.selectedTheme.slug === t.slug) btn.classList.add("selected");
+    btn.innerHTML = `
+      <div class="theme-name">${escapeHtml(t.label)}</div>
+      <div class="theme-desc">${escapeHtml(t.description || "")}</div>`;
+    btn.addEventListener("click", () => {
+      exportState.selectedTheme = t;
+      exportState.themeVars = {};
+      for (const v of t.vars || []) exportState.themeVars[v.name] = v.default;
+      renderThemeStep();
+    });
+    list.appendChild(btn);
+  }
+  // Theme var inputs
+  vars_.innerHTML = "";
+  const theme = exportState.selectedTheme;
+  if (!theme.vars || !theme.vars.length) return;
+  const form = document.createElement("div");
+  form.className = "tv-form";
+  for (const v of theme.vars) {
+    form.appendChild(_renderField({
+      kind: "tv",
+      spec: v,
+      value: exportState.themeVars[v.name],
+      onChange: (val) => { exportState.themeVars[v.name] = val; },
+    }));
+  }
+  vars_.appendChild(form);
+}
+
+async function renderOptionsStep() {
+  const e = exportState.selectedExporter;
+  const host = document.getElementById("optionsForm");
+  host.innerHTML = `<p class="hint-text">Loading options…</p>`;
+  // Always re-fetch on step 3 entry so plugins with dynamic options
+  // (field pickers) see the current item set.
+  let schema;
+  try {
+    const r = await fetch("/api/export/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ exporter: e.slug, item_ids: exportState.itemIds }),
+    });
+    schema = r.ok ? await r.json() : (e.options_schema || []);
+  } catch {
+    schema = e.options_schema || [];
+  }
+  host.innerHTML = "";
+  if (!schema.length) {
+    host.innerHTML = `<p class="hint-text">No options for this exporter — click <strong>Run</strong> to export.</p>`;
+    return;
+  }
+  for (const opt of schema) {
+    if (!(opt.name in exportState.options) && opt.default !== undefined) {
+      exportState.options[opt.name] = opt.default;
+    }
+    host.appendChild(_renderField({
+      kind: "opt",
+      spec: opt,
+      value: exportState.options[opt.name],
+      onChange: (val) => { exportState.options[opt.name] = val; },
+    }));
+  }
+}
+
+function _renderField({ kind, spec, value, onChange }) {
+  const wrap = document.createElement("div");
+  wrap.className = kind === "tv" ? "tv" : "opt";
+  const id = `${kind}-${spec.name}`;
+  const label = spec.label || spec.name.replace(/_/g, " ");
+
+  const make = (html) => { wrap.innerHTML = html; return wrap.querySelector("input,select,textarea"); };
+
+  let inp;
+  if (spec.type === "color") {
+    inp = make(`<label for="${id}">${escapeHtml(label)}</label>
+                <input type="color" id="${id}" value="${escapeHtml(value || "#000000")}">`);
+    inp.addEventListener("input", () => onChange(inp.value));
+  } else if (spec.type === "bool") {
+    wrap.innerHTML = `<label class="check"><input type="checkbox" id="${id}" ${value ? "checked" : ""}> ${escapeHtml(label)}</label>`;
+    inp = wrap.querySelector("input");
+    inp.addEventListener("change", () => onChange(inp.checked));
+  } else if (spec.type === "number") {
+    inp = make(`<label for="${id}">${escapeHtml(label)}</label>
+                <input type="number" id="${id}" value="${value ?? ""}">`);
+    inp.addEventListener("input", () => onChange(inp.value === "" ? null : Number(inp.value)));
+  } else if (spec.type === "select") {
+    const opts = (spec.options || []).map(o => {
+      const s = String(o);
+      return `<option value="${escapeHtml(s)}" ${o === value ? "selected" : ""}>${escapeHtml(s)}</option>`;
+    }).join("");
+    inp = make(`<label for="${id}">${escapeHtml(label)}</label>
+                <select id="${id}">${opts}</select>`);
+    inp.addEventListener("change", () => onChange(inp.value));
+  } else if (spec.type === "multiselect") {
+    const checks = (spec.options || []).map(o => {
+      const s = String(o);
+      const checked = (value || []).includes(o) ? "checked" : "";
+      return `<label class="check"><input type="checkbox" value="${escapeHtml(s)}" ${checked}> ${escapeHtml(s)}</label>`;
+    }).join("");
+    wrap.innerHTML = `<fieldset><legend>${escapeHtml(label)}</legend>${checks}</fieldset>`;
+    wrap.querySelectorAll("input[type=checkbox]").forEach(cb => {
+      cb.addEventListener("change", () => {
+        const vals = [];
+        wrap.querySelectorAll("input[type=checkbox]:checked").forEach(c => vals.push(c.value));
+        onChange(vals);
+      });
+    });
+  } else {
+    inp = make(`<label for="${id}">${escapeHtml(label)}</label>
+                <input type="text" id="${id}" value="${escapeHtml(value ?? "")}">`);
+    inp.addEventListener("input", () => onChange(inp.value));
+  }
+
+  if (spec.help) {
+    const hint = document.createElement("p");
+    hint.className = "hint-text";
+    hint.textContent = spec.help;
+    wrap.appendChild(hint);
+  }
+  return wrap;
+}
+
+async function runExport() {
+  const e = exportState.selectedExporter;
+  const status = document.getElementById("exportStatus");
+  const next = document.getElementById("exportNextBtn");
+  const back = document.getElementById("exportBackBtn");
+  const body = {
+    exporter: e.slug,
+    theme: exportState.selectedTheme?.slug || null,
+    theme_vars: exportState.themeVars,
+    options: exportState.options,
+    item_ids: exportState.itemIds,
+  };
+  status.textContent = "Running…";
+  next.disabled = true;
+  back.disabled = true;
+  try {
+    const r = await fetch("/api/export/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      throw new Error(`HTTP ${r.status}: ${text}`);
+    }
+    if (e.execution_mode === "immediate") {
+      const blob = await r.blob();
+      const cd = r.headers.get("Content-Disposition") || "";
+      const m = /filename="([^"]+)"/.exec(cd);
+      const filename = m ? m[1] : `booki-export-${Date.now()}`;
+      const a = document.createElement("a");
+      const url = URL.createObjectURL(blob);
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      status.textContent = `Done: ${filename}`;
+      showToast(`Exported ${filename}`);
+      setTimeout(closeExport, 900);
+    } else {
+      const data = await r.json();
+      status.textContent = `Background task started (#${data.task_id}). See Manage › Tasks.`;
+      showToast("Background task queued — see Manage › Tasks");
+      setTimeout(closeExport, 1400);
+    }
+  } catch (err) {
+    status.textContent = `Error: ${err.message}`;
+  } finally {
+    next.disabled = false;
+    back.disabled = exportState.step === 1;
+  }
+}
+
+document.getElementById("openExportBtn")?.addEventListener("click", openExport);
+document.getElementById("exportDrawerClose")?.addEventListener("click", closeExport);
+document.getElementById("exportNextBtn")?.addEventListener("click", () => {
+  if (exportState.step === 1) {
+    if (!exportState.selectedExporter) {
+      document.getElementById("exportStatus").textContent = "Pick an exporter first.";
+      return;
+    }
+    document.getElementById("exportStatus").textContent = "";
+    exportState.step = exportState.selectedExporter.uses_themes ? 2 : 3;
+  } else if (exportState.step === 2) {
+    if (exportState.selectedExporter.uses_themes && !exportState.selectedTheme) {
+      document.getElementById("exportStatus").textContent = "Pick a theme first.";
+      return;
+    }
+    document.getElementById("exportStatus").textContent = "";
+    exportState.step = 3;
+  } else {
+    return runExport();
+  }
+  renderExportStep();
+});
+document.getElementById("exportBackBtn")?.addEventListener("click", () => {
+  if (exportState.step === 3 && !exportState.selectedExporter?.uses_themes) {
+    exportState.step = 1;
+  } else if (exportState.step > 1) {
+    exportState.step -= 1;
+  }
+  renderExportStep();
+});
+document.getElementById("exportStepnav")?.addEventListener("click", (e) => {
+  const pill = e.target.closest(".step-pill");
+  if (!pill) return;
+  const target = Number(pill.dataset.step);
+  // Only allow stepping back to a completed step.
+  if (target > exportState.step) return;
+  if (target === 2 && !exportState.selectedExporter?.uses_themes) return;
+  exportState.step = target;
+  renderExportStep();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const drawer = document.getElementById("exportDrawer");
+  if (drawer && !drawer.classList.contains("hidden")) closeExport();
+});
+
+
+// ─── Manage › Tasks sub-tab ─────────────────────────────────────────
+
+let _tasksPollTimer = null;
+
+function startTasksPoll() {
+  stopTasksPoll();
+  _tasksPollTimer = setInterval(() => {
+    if (_manageSubtab === "tasks") refreshManageTasks();
+  }, 3000);
+}
+function stopTasksPoll() {
+  if (_tasksPollTimer) { clearInterval(_tasksPollTimer); _tasksPollTimer = null; }
+}
+
+async function refreshManageTasks() {
+  const host = document.getElementById("manageTasks");
+  if (!host) return;
+  let tasks;
+  try {
+    const r = await fetch("/api/export/tasks");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    tasks = await r.json();
+  } catch (e) {
+    host.innerHTML = `<p class="hint-text">Failed to load tasks: ${escapeHtml(e.message)}</p>`;
+    return;
+  }
+  if (!tasks.length) {
+    host.innerHTML = `<p class="hint-text">No background tasks yet. Run a ✈️ exporter to create one.</p>`;
+    return;
+  }
+  host.innerHTML = tasks.map(_renderTaskRow).join("");
+  host.querySelectorAll(".task-row").forEach(row => {
+    const id = row.dataset.id;
+    row.querySelector(".task-toggle")?.addEventListener("click", () => {
+      row.classList.toggle("expanded");
+      const t = row.querySelector(".task-toggle");
+      if (t) t.textContent = row.classList.contains("expanded") ? "▾" : "▸";
+    });
+    row.querySelector(".task-retry")?.addEventListener("click", async () => {
+      await fetch(`/api/export/tasks/${id}/retry`, { method: "POST" });
+      refreshManageTasks();
+    });
+    row.querySelector(".task-delete")?.addEventListener("click", async () => {
+      if (!confirm("Delete this task and its artifact?")) return;
+      await fetch(`/api/export/tasks/${id}`, { method: "DELETE" });
+      refreshManageTasks();
+    });
+  });
+}
+
+function _renderTaskRow(t) {
+  const STATUS = {
+    pending: { ico: "⏳", cls: "pending" },
+    running: { ico: "🏃", cls: "running" },
+    success: { ico: "✓",  cls: "success" },
+    failed:  { ico: "✗",  cls: "failed"  },
+  }[t.status] || { ico: "·", cls: "" };
+
+  const pct = t.progress_total > 0
+    ? Math.min(100, Math.round((t.progress_done / t.progress_total) * 100))
+    : 0;
+  const progressBar = t.status === "running"
+    ? `<div class="task-progress"><div class="task-progress-fill" style="width:${pct}%"></div></div>`
+    : "";
+
+  const dl = (t.status === "success" && t.artifact_path)
+    ? `<a class="btn small" href="/api/export/tasks/${t.id}/artifact" download>⬇ ${escapeHtml(t.artifact_filename || "download")}</a>`
+    : "";
+  const retryBtn = (t.status === "failed")
+    ? `<button class="btn small task-retry" type="button">↻ Retry</button>`
+    : "";
+
+  const itemSuffix = t.item_count === 1 ? "" : "s";
+  const created = (t.created_at || "").replace("T", " ").slice(0, 16);
+
+  const errorBlock = t.error
+    ? `<div class="task-error">${escapeHtml(t.error)}</div>` : "";
+  const pathBlock = t.artifact_path
+    ? `<div class="task-artifact-path">📂 <code>${escapeHtml(t.artifact_path)}</code></div>` : "";
+  const logBlock = t.log
+    ? `<pre class="task-log">${escapeHtml(t.log)}</pre>` : "";
+
+  return `
+    <div class="task-row task-${STATUS.cls}" data-id="${t.id}">
+      <div class="task-summary">
+        <button class="task-toggle" type="button" aria-label="Toggle details">▸</button>
+        <span class="task-status-icon">${STATUS.ico}</span>
+        <span class="task-exporter">${escapeHtml(t.exporter)}</span>
+        <span class="task-meta">${escapeHtml(created)}</span>
+        <span class="task-meta">${t.item_count} item${itemSuffix}</span>
+        ${progressBar}
+        <div class="task-actions">
+          ${dl}
+          ${retryBtn}
+          <button class="btn small task-delete" type="button" title="Delete task and artifact">🗑</button>
+        </div>
+      </div>
+      <div class="task-fold">
+        ${errorBlock}
+        ${pathBlock}
+        ${logBlock || `<p class="hint-text">No log yet.</p>`}
+      </div>
+    </div>`;
+}

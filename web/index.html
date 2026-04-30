@@ -24,7 +24,9 @@
     <button type="submit" class="btn" id="addLinkBtn" title="Add link">＋</button>
   </form>
   <button type="button" class="btn header-export" id="openExportBtn"
-          title="Export selected items">⬇ Export</button>
+          title="Export the items currently shown in this tab" disabled>
+    ⬇ <span id="exportBtnLabel">Export</span>
+  </button>
 </header>
 
 <nav class="tabs" id="tabBar" role="tablist" aria-label="Sections"></nav>
@@ -269,117 +271,38 @@
   </div>
 </div>
 
-<div id="exportModal" class="modal hidden" aria-hidden="true">
-  <div class="modal-inner export-modal">
-    <header>
-      <h2>Export wizard</h2>
-      <div class="export-head-actions">
-        <select id="exportLoadConfig" title="Load a saved export config">
-          <option value="">Load saved…</option>
-        </select>
-        <button class="drawer-close" id="exportClose" aria-label="Close">✕</button>
-      </div>
+<aside id="exportDrawer" class="export-drawer hidden" aria-hidden="true">
+  <div class="export-drawer-inner">
+    <header class="export-head">
+      <h2>Export <span id="exportItemCount" class="export-count"></span></h2>
+      <button class="drawer-close" id="exportDrawerClose" aria-label="Close">✕</button>
     </header>
-
-    <section class="export-section">
-      <h3>1. Select items <span class="export-count" id="exportCount">0 items</span></h3>
-      <div class="export-tabs">
-        <button type="button" class="export-tab active" data-tab="lists">Lists</button>
-        <button type="button" class="export-tab" data-tab="smart">Smart</button>
-        <button type="button" class="export-tab" data-tab="tags">Tags</button>
-        <button type="button" class="export-tab" data-tab="filter">Filter</button>
-        <button type="button" class="export-tab" data-tab="manual">Manual</button>
+    <nav class="export-stepnav" id="exportStepnav" aria-label="Export wizard steps">
+      <button type="button" class="step-pill active" data-step="1">1. Exporter</button>
+      <button type="button" class="step-pill" data-step="2">2. Theme</button>
+      <button type="button" class="step-pill" data-step="3">3. Options</button>
+    </nav>
+    <div class="export-stepbody">
+      <section class="export-step active" data-step="1">
+        <ul id="exporterList" class="exporter-list"></ul>
+      </section>
+      <section class="export-step" data-step="2">
+        <div id="themeList" class="theme-list"></div>
+        <div id="themeVars" class="theme-vars"></div>
+      </section>
+      <section class="export-step" data-step="3">
+        <div id="optionsForm" class="options-form"></div>
+      </section>
+    </div>
+    <footer class="export-actions">
+      <p id="exportStatus" class="export-status"></p>
+      <div class="export-buttons">
+        <button type="button" class="btn" id="exportBackBtn" disabled>← Back</button>
+        <button type="button" class="btn primary" id="exportNextBtn">Next →</button>
       </div>
-
-      <div class="export-tab-panel active" data-panel="lists">
-        <p class="hint-text">Items in ANY picked list are included.</p>
-        <div id="selLists" class="chip-picker"></div>
-      </div>
-
-      <div class="export-tab-panel" data-panel="smart">
-        <p class="hint-text">Items matching ANY picked smart list are included. Defined in config.toml.</p>
-        <div id="selSmartLists" class="chip-picker"></div>
-      </div>
-
-      <div class="export-tab-panel" data-panel="tags">
-        <p class="hint-text">Items with ANY picked tag are included.</p>
-        <div id="selTags" class="chip-picker"></div>
-      </div>
-
-      <div class="export-tab-panel" data-panel="filter">
-        <p class="hint-text">Include items matching ALL these predicates.</p>
-        <div class="filter-grid">
-          <label>Source
-            <select id="selFilterSource"><option value="">(any)</option></select>
-          </label>
-          <label>Kind
-            <select id="selFilterKind"><option value="">(any)</option></select>
-          </label>
-          <label>Min importance
-            <input type="number" id="selFilterImpMin" min="0" max="10" step="1" placeholder="0">
-          </label>
-          <label>Max importance
-            <input type="number" id="selFilterImpMax" min="0" max="10" step="1" placeholder="10">
-          </label>
-        </div>
-      </div>
-
-      <div class="export-tab-panel" data-panel="manual">
-        <p class="hint-text">Search and click items to add them individually.</p>
-        <input type="search" id="selManualSearch" placeholder="Search title or URL…"
-               autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
-        <ul id="selManualResults" class="manual-results"></ul>
-        <div class="picked-head">Picked individually:</div>
-        <div id="selManualPicked" class="chip-picker"></div>
-      </div>
-    </section>
-
-    <section class="export-section">
-      <h3>2. Exporter</h3>
-      <div class="exporter-row">
-        <select id="exporterSelect"></select>
-        <span class="hint-text" id="exporterDesc"></span>
-      </div>
-      <label class="theme-row hidden" id="themeRow">Theme
-        <select id="themeSelect"></select>
-      </label>
-    </section>
-
-    <section class="export-section">
-      <h3>3. Options</h3>
-      <div id="exporterOptions" class="options-grid"></div>
-    </section>
-
-    <section class="export-section">
-      <h3>4. Run</h3>
-      <div class="run-row">
-        <label>Export name
-          <input type="text" id="exportName" placeholder="e.g. weekly-ai-digest">
-        </label>
-        <label class="save-config">
-          <input type="checkbox" id="saveConfigCheck"> Save this configuration
-        </label>
-      </div>
-      <div class="form-actions">
-        <button type="button" class="btn" id="previewBtn">Preview</button>
-        <button type="button" class="btn primary" id="runBtn">Run & Download</button>
-      </div>
-      <p id="exportStatus" class="edit-status"></p>
-    </section>
-
-    <section class="export-section export-preview hidden" id="previewSection">
-      <div class="preview-head">
-        <h3>Preview</h3>
-        <button type="button" class="btn preview-reset hidden" id="previewResetBtn"
-                title="Discard inline edits">↺ Reset edits</button>
-      </div>
-      <p class="hint-text preview-edit-hint">Hover over the title, footer, or any link's title / summary / notes — click the pencil to edit. Enter saves, Esc cancels.</p>
-      <div id="previewHost" class="preview-host"></div>
-      <pre id="previewText" class="preview-text hidden"></pre>
-    </section>
+    </footer>
   </div>
-</div>
-
+</aside>
 
 <div id="toast" class="toast hidden"></div>
 

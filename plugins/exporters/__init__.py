@@ -1,15 +1,8 @@
 """
-plugins.exporters — export plugin package.
+plugins.exporters — exporter plugin package.
 
-Each subdirectory here is one `Exporter` subclass (or a small cluster).
-Importing this package auto-imports every subpackage, which triggers
-`@register_exporter` side-effects and populates the exporter registry in
-`plugins.base`.
-
-To add a new exporter:
-    1. Create `plugins/exporters/<name>/__init__.py` with a
-       `@register_exporter`-decorated `Exporter` subclass.
-    2. That's it — it's picked up on next `import plugins`.
+Each subpackage is one Exporter. Importing this package side-effect-registers
+all built-ins by importing every subpackage.
 """
 
 from __future__ import annotations

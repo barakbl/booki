@@ -1,0 +1,22 @@
+name = "Light"
+description = "Clean light palette with a hint of color."
+
+[vars.bg]
+type = "color"
+label = "Background"
+default = "#ffffff"
+
+[vars.text]
+type = "color"
+label = "Text"
+default = "#1a1a1a"
+
+[vars.link]
+type = "color"
+label = "Link"
+default = "#2563eb"
+
+[vars.accent]
+type = "color"
+label = "Accent"
+default = "#8b5cf6"

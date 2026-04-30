@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<style>
+:root {
+  --bg: {{ theme_vars.bg }};
+  --text: {{ theme_vars.text }};
+  --link: {{ theme_vars.link }};
+  --accent: {{ theme_vars.accent }};
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+}
+.wrap {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 36px 24px 80px;
+}
+h1 {
+  font-size: 28px;
+  margin: 0 0 6px;
+}
+.meta {
+  color: color-mix(in srgb, var(--text) 55%, transparent);
+  font-size: 13px;
+  margin-bottom: 22px;
+}
+input.filter {
+  width: 100%;
+  padding: 10px 14px;
+  font: inherit;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 90%, var(--text) 4%);
+  color: var(--text);
+  margin-bottom: 24px;
+  outline: none;
+  transition: border-color 120ms;
+}
+input.filter:focus { border-color: var(--accent); }
+.group-name {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: color-mix(in srgb, var(--text) 55%, transparent);
+  margin: 28px 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+}
+.links {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.item {
+  padding: 12px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+}
+.item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.item-glyph { font-size: 16px; }
+.item-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--link);
+  text-decoration: none;
+}
+.item-title:hover { text-decoration: underline; }
+.item-imp {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.item-source {
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 50%, transparent);
+}
+.item-url {
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 50%, transparent);
+  word-break: break-all;
+  margin-top: 2px;
+}
+.item-summary {
+  margin-top: 5px;
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+}
+.tags {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tag {
+  font-size: 11px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+.empty {
+  color: color-mix(in srgb, var(--text) 50%, transparent);
+  margin-top: 20px;
+}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1>{{ title }}</h1>
+  <p class="meta">{{ item_count }} item{% if item_count != 1 %}s{% endif %} · generated {{ generated_at }}</p>
+  <input class="filter" type="search" id="filter" placeholder="Filter… (title, URL, tag, summary)">
+  <div id="results">
+{%- for g in groups %}
+    <section class="group" data-group="{{ g.name }}">
+{%- if g.name %}
+      <h2 class="group-name">{{ g.name }}</h2>
+{%- endif %}
+      <ul class="links">
+{%- for it in g['items'] %}
+        <li class="item" data-search="{{ ((it.title or '') ~ ' ' ~ (it.url or '') ~ ' ' ~ ((it.tags or [])|join(' ')) ~ ' ' ~ (it.summary or ''))|lower }}">
+          <div class="item-head">
+            <span class="item-glyph">{{ it.kind|glyph }}</span>
+            <a class="item-title" href="{{ it.url }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
+            {% if it.importance %}<span class="item-imp">★{{ it.importance }}</span>{% endif %}
+            {% if it.source %}<span class="item-source">{{ it.source }}</span>{% endif %}
+          </div>
+          <div class="item-url">{{ it.url }}</div>
+          {% if it.summary %}<div class="item-summary">{{ it.summary }}</div>{% endif %}
+          {% if it.tags %}<div class="tags">{% for t in it.tags %}<span class="tag">#{{ t }}</span>{% endfor %}</div>{% endif %}
+        </li>
+{%- endfor %}
+      </ul>
+    </section>
+{%- endfor %}
+  </div>
+  <p class="empty" id="empty" hidden>No matches.</p>
+</main>
+<script>
+const f = document.getElementById('filter');
+const empty = document.getElementById('empty');
+f.focus();
+f.addEventListener('input', () => {
+  const q = f.value.trim().toLowerCase();
+  const items = document.querySelectorAll('.item');
+  let any = false;
+  items.forEach(li => {
+    const hit = !q || li.dataset.search.includes(q);
+    li.style.display = hit ? '' : 'none';
+    if (hit) any = true;
+  });
+  document.querySelectorAll('.group').forEach(g => {
+    const visible = Array.from(g.querySelectorAll('.item'))
+                         .some(li => li.style.display !== 'none');
+    g.style.display = visible ? '' : 'none';
+  });
+  empty.hidden = any;
+});
+</script>
+</body>
+</html>

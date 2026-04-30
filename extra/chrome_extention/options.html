@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Booki — Settings</title>
+<link rel="stylesheet" href="options.css">
+</head>
+<body>
+<main>
+  <h1>📚 Booki — Settings</h1>
+
+  <section>
+    <label class="field">
+      <span class="label">Booki host</span>
+      <input id="hostUrl" type="text" placeholder="http://127.0.0.1:8765">
+      <span class="hint" id="hostHint">Local Booki must be running.</span>
+    </label>
+  </section>
+
+  <section>
+    <h2>Show in picker</h2>
+    <p class="hint">Pick which item kinds appear in the Cmd/Ctrl+Shift picker. Defaults to <code>bookmark</code>.</p>
+    <div id="kinds" class="kinds"></div>
+  </section>
+
+  <footer>
+    <button id="save" class="primary">Save</button>
+    <button id="test">Test connection</button>
+    <span id="status" class="status"></span>
+  </footer>
+</main>
+<script src="options.js"></script>
+</body>
+</html>

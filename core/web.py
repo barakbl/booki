@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import secrets
 import shutil
 import sys
 import threading
@@ -40,20 +39,8 @@ from pydantic import BaseModel, Field
 from .ingest import FRONTMATTER_RE, bm_id, parse_bookmark_file
 from .store import ItemStore, today_str
 import plugins as _plugins_pkg  # noqa: F401 — triggers plugin registration
-from plugins.base import iter_enrichers, iter_exporters, iter_registered, iter_tabs
-from plugins import exporters as _exporters_pkg  # noqa: F401 — triggers exporter registration
+from plugins.base import iter_enrichers, iter_registered, iter_tabs
 from .download import DownloadConfig, download_one, update_md_for_download
-from .exporter import (
-    ExportConfig,
-    ExportPaths,
-    Selection,
-    list_configs,
-    load_config as load_export_config,
-    resolve as resolve_selection,
-    safe_config_name,
-    save_config as save_export_config,
-    timestamp_slug,
-)
 from .sync import ExcludeFilter, LinkExcluded, sync_link
 
 
@@ -146,33 +133,6 @@ class AskResult(BaseModel):
     bookmarks: list[dict] = Field(default_factory=list)
     provider: str = ""
     model: str = ""
-
-
-class ExportSelection(BaseModel):
-    lists: list[str] = Field(default_factory=list)
-    tags: list[str] = Field(default_factory=list)
-    filters: dict = Field(default_factory=dict)
-    manual_ids: list[str] = Field(default_factory=list)
-    smart_lists: list[str] = Field(default_factory=list)
-
-
-class ExportRunRequest(BaseModel):
-    exporter: str
-    theme: Optional[str] = None
-    options: dict = Field(default_factory=dict)
-    selection: ExportSelection = Field(default_factory=ExportSelection)
-    name: Optional[str] = None               # used for artifact dir + saved config
-    save_config_as: Optional[str] = None     # if set, also persist a YAML config under exports/configs
-
-
-class ExportRunResponse(BaseModel):
-    artifact_token: str
-    download_url: str
-    artifact_path: str
-    mime: str
-    preview_text: Optional[str] = None
-    item_count: int
-    config_path: Optional[str] = None
 
 
 # ─── Bookmark service ─────────────────────────────────────────────────────────
@@ -278,58 +238,6 @@ def _to_bookmark(bid: str, fm: dict) -> Bookmark:
     )
 
 
-def _fm_to_export_dict(bid: str, fm: dict, path: Path, bookmarks_dir: Path) -> dict:
-    """Flatten frontmatter + (optional) body into the dict shape exporters consume."""
-    # Read body lazily — exporters can request it via options.include_body.
-    try:
-        content = path.read_text(encoding="utf-8")
-        m = FRONTMATTER_RE.match(content)
-        body = content[m.end():] if m else content
-    except Exception:
-        body = ""
-    out = {
-        "id": bid,
-        "title": str(fm.get("title") or ""),
-        "url": str(fm.get("url") or ""),
-        "source": str(fm.get("source") or ""),
-        "sources": [str(s) for s in (fm.get("sources") or [])],
-        "kind": str(fm.get("kind") or "bookmark"),
-        "browser_path": str(fm.get("browser_path") or ""),
-        "folder_path": str(fm.get("folder_path") or ""),
-        "importance": int(fm.get("importance") or 0),
-        "tags": [str(t) for t in (fm.get("tags") or [])],
-        "lists": [str(l) for l in (fm.get("lists") or [])],
-        "keywords": [str(k) for k in (fm.get("keywords") or [])],
-        "notes": str(fm.get("notes") or ""),
-        "summary": str(fm.get("summary") or ""),
-        "status": str(fm.get("status") or ""),
-        "date_bookmarked": str(fm.get("date_bookmarked") or ""),
-        "last_sync": str(fm.get("last_sync") or ""),
-        "archive_url": str(fm.get("archive_url") or ""),
-        "removed_from_browser": bool(fm.get("removed_from_browser")),
-        "removed_from_source": bool(fm.get("removed_from_source")),
-        "body": body.strip(),
-        "file": str(path.relative_to(bookmarks_dir)) if bookmarks_dir in path.parents or path == bookmarks_dir else str(path),
-    }
-    return out
-
-
-def _exporter_to_dict(name: str, inst) -> dict:
-    return {
-        "name": name,
-        "label": getattr(inst, "label", "") or name,
-        "description": getattr(inst, "description", "") or "",
-        "supports_themes": bool(getattr(inst, "supports_themes", False)),
-        "default_theme": getattr(inst, "default_theme", None),
-        "options": [
-            {
-                "name": o.name, "label": o.label, "type": o.type,
-                "default": o.default, "choices": o.choices, "help": o.help,
-            } for o in (inst.options() or [])
-        ],
-    }
-
-
 def _collect_schema() -> dict[str, list[dict]]:
     """
     Merge field_specs() across all registered sources AND enrichers,
@@ -418,13 +326,6 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
     svc = BookmarkService(bookmarks_dir)
     dl_cfg = DownloadConfig.from_toml(cfg, config_path)
     dl_cfg.dir.mkdir(parents=True, exist_ok=True)
-
-    export_paths = ExportPaths.from_toml(cfg, config_path.parent)
-    export_paths.ensure()
-
-    # token → (artifact_path, mime). Tokens are single-process; restarting the
-    # server invalidates outstanding download links (acceptable tradeoff).
-    export_artifacts: dict[str, tuple[Path, str]] = {}
 
     # Minimal in-memory job tracker. Not persisted — the authoritative state
     # is the `downloaded: true` flag on the .md once the job completes.
@@ -562,14 +463,6 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
                               .get(name, {}) or {}).get("disabled", False)),
         } for name, cls in iter_enrichers()]
 
-        exporters = [{
-            "name":            name,
-            "label":           getattr(cls, "label", "") or name,
-            "description":     getattr(cls, "description", "") or "",
-            "supports_themes": bool(getattr(cls, "supports_themes", False)),
-            "module":          cls.__module__,
-        } for name, cls in iter_exporters()]
-
         tabs = [{
             "id":     c.id,
             "label":  c.label,
@@ -582,7 +475,6 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         return {
             "sources":   sources,
             "enrichers": enrichers,
-            "exporters": exporters,
             "tabs":      tabs,
         }
 
@@ -918,162 +810,9 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         return result
 
     # ── export system ────────────────────────────────────────────────────────
-
-    @app.get("/api/exporters")
-    def list_exporters():
-        out = []
-        for name, cls in iter_exporters():
-            inst = cls()
-            out.append(_exporter_to_dict(name, inst))
-        return out
-
-    @app.get("/api/themes")
-    def list_themes(exporter: str):
-        cls = None
-        for n, c in iter_exporters():
-            if n == exporter:
-                cls = c
-                break
-        if cls is None:
-            raise HTTPException(404, f"Unknown exporter: {exporter}")
-        inst = cls()
-        return inst.available_themes(export_paths.themes_dir)
-
-    @app.get("/api/export/configs")
-    def export_configs_list():
-        return list_configs(export_paths.configs_dir)
-
-    @app.get("/api/export/configs/{name}")
-    def export_configs_get(name: str):
-        safe = safe_config_name(name)
-        path = export_paths.configs_dir / f"{safe}.yaml"
-        if not path.exists():
-            raise HTTPException(404, f"Config not found: {safe}.yaml")
-        try:
-            cfg = load_export_config(path)
-        except Exception as e:
-            raise HTTPException(400, f"Failed to load config: {e}")
-        return {"file": path.name, **cfg.to_dict()}
-
-    @app.delete("/api/export/configs/{name}")
-    def export_configs_delete(name: str):
-        safe = safe_config_name(name)
-        path = export_paths.configs_dir / f"{safe}.yaml"
-        if not path.exists():
-            raise HTTPException(404, f"Config not found: {safe}.yaml")
-        path.unlink()
-        return {"deleted": path.name}
-
-    @app.post("/api/export/run", response_model=ExportRunResponse)
-    def export_run(req: ExportRunRequest):
-        # 1. Look up exporter.
-        cls = None
-        for n, c in iter_exporters():
-            if n == req.exporter:
-                cls = c
-                break
-        if cls is None:
-            raise HTTPException(404, f"Unknown exporter: {req.exporter}")
-
-        # 2. Resolve selection → list of dicts.
-        svc.refresh()
-        sel_dict = req.selection.model_dump()
-        # Expand smart_lists → matching item ids, append to manual_ids so the
-        # existing resolver picks them up as a regular inclusion criterion.
-        wanted_smart = [s for s in (sel_dict.pop("smart_lists", []) or []) if s]
-        if wanted_smart:
-            from . import smart_lists as sl_mod
-            try:
-                live_cfg = load_config(app.state.config_path)
-            except Exception:
-                live_cfg = app.state.cfg
-            specs_by_name = {s.name: s for s in sl_mod.parse_smart_lists(live_cfg)}
-            extra_ids: set[str] = set()
-            for name in wanted_smart:
-                spec = specs_by_name.get(name)
-                if not spec:
-                    continue
-                for bid, (_p, fm) in svc._index.items():
-                    if sl_mod.matches(fm, spec):
-                        extra_ids.add(bid)
-            sel_dict["manual_ids"] = list({*sel_dict.get("manual_ids", []), *extra_ids})
-        sel = Selection.from_dict(sel_dict)
-        resolved = resolve_selection(svc._index, sel)
-        items = [
-            _fm_to_export_dict(bid, fm, svc._index[bid][0], svc.dir)
-            for bid, fm in resolved
-        ]
-        if not items:
-            raise HTTPException(400, "No items matched the selection.")
-
-        # 3. Render.
-        inst = cls()
-        inst.configure(cfg.get("exporters", {}).get(req.exporter, {}))
-        artifact_name = safe_config_name(req.name or req.exporter)
-        out_dir = export_paths.artifacts_dir / f"{artifact_name}-{timestamp_slug()}"
-        options = dict(req.options or {})
-        options["_themes_root"] = str(export_paths.themes_dir)
-        t0 = time.monotonic()
-        try:
-            result = inst.export(items, theme=req.theme, options=options, out_dir=out_dir)
-        except Exception as e:
-            # Clean up a half-written dir if we crashed mid-render.
-            if out_dir.exists():
-                shutil.rmtree(out_dir, ignore_errors=True)
-            log.exception("export_failed", extra={
-                "exporter": req.exporter, "theme": req.theme, "item_count": len(items),
-            })
-            raise HTTPException(500, f"Export failed: {type(e).__name__}: {e}")
-        log.info("export_run", extra={
-            "exporter": req.exporter, "theme": req.theme, "item_count": len(items),
-            "duration_s": round(time.monotonic() - t0, 3),
-            "artifact_path": str(result.artifact_path),
-        })
-
-        # 4. Register a download token.
-        token = secrets.token_urlsafe(16)
-        export_artifacts[token] = (result.artifact_path, result.mime)
-
-        # 5. Optionally persist the config.
-        config_path: Optional[Path] = None
-        if req.save_config_as:
-            ec = ExportConfig(
-                name=req.save_config_as,
-                exporter=req.exporter,
-                theme=req.theme,
-                selection=sel,
-                options={k: v for k, v in (req.options or {}).items() if not k.startswith("_")},
-            )
-            try:
-                config_path = save_export_config(ec, export_paths.configs_dir)
-            except Exception as e:
-                raise HTTPException(500, f"Export succeeded but saving config failed: {e}")
-
-        return ExportRunResponse(
-            artifact_token=token,
-            download_url=f"/api/export/download/{token}",
-            artifact_path=str(result.artifact_path),
-            mime=result.mime,
-            preview_text=result.preview_text,
-            item_count=len(items),
-            config_path=str(config_path) if config_path else None,
-        )
-
-    @app.get("/api/export/download/{token}")
-    def export_download(token: str):
-        entry = export_artifacts.get(token)
-        if not entry:
-            raise HTTPException(404, "Artifact token not found or expired.")
-        path, mime = entry
-        if not path.exists():
-            raise HTTPException(410, "Artifact no longer on disk.")
-        # If the artifact is a directory (multi-file export), zip it on the fly.
-        if path.is_dir():
-            zip_path = path.with_suffix(".zip")
-            if not zip_path.exists():
-                shutil.make_archive(str(path), "zip", root_dir=str(path.parent), base_dir=path.name)
-            return FileResponse(zip_path, filename=zip_path.name, media_type="application/zip")
-        return FileResponse(path, filename=path.name, media_type=mime)
+    # Wired below by core.exporter.attach_routes().
+    from .exporter import attach_routes as _attach_exporter_routes
+    _attach_exporter_routes(app, cfg, config_path, svc)
 
     # ── static UI ────────────────────────────────────────────────────────────
 

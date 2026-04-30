@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Booki</title>
+<link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">📚 Booki</div>
+  <div class="actions">
+    <button id="addCurrent" type="button" title="Add current tab to Booki">＋</button>
+    <button id="refresh" type="button" title="Refresh list">↻</button>
+    <button id="openOptions" type="button" title="Settings">⚙</button>
+  </div>
+</header>
+
+<div class="search-wrap">
+  <input id="search" type="search" placeholder="Type to filter…"
+         autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <button id="modeBtn" class="mode-btn" type="button"
+          title="Toggle fuzzy / substring matching">fuzzy</button>
+</div>
+
+<p class="hint" id="hint">↵ open · ⌘/⌃ + ↵ new tab · Esc clear</p>
+
+<ul id="results" class="results"></ul>
+<p id="empty" class="empty hidden">No matches.</p>
+
+<footer class="footer">
+  <span id="status">—</span>
+</footer>
+
+<script src="sidepanel.js"></script>
+</body>
+</html>
