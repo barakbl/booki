@@ -1428,6 +1428,11 @@ window.booki.ui = {
   // Helpers a plugin tab is likely to want when rendering items inline.
   escapeHtml: (s) => escapeHtml(s),
   highlight:  (text, matches) => highlight(text, matches),
+  // Plugin tabs that own their results container (and therefore declare
+  // `getSelection`) call this after re-rendering so the topbar's
+  // "⬇ Export N items" label refreshes. Built-in tabs use it implicitly
+  // via the MutationObserver below.
+  refreshExportButton: () => refreshExportButton(),
 };
 window.booki.search = {
   fuzzy:     (q, text) => fuzzyMatch(q, text),
@@ -2846,7 +2851,7 @@ function refreshExportButton() {
 // refreshExportButton() in their onShow; this MutationObserver covers the
 // case where a tab's filter input fires synchronous DOM updates.
 function _observeExportRoots() {
-  const roots = ["#results", "#photoGrid", "#videoGrid", "#askSources"];
+  const roots = ["#results", "#photoGrid", "#videoGrid", "#askSources", "#docResults"];
   for (const sel of roots) {
     const node = document.querySelector(sel);
     if (!node) continue;

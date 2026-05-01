@@ -34,6 +34,8 @@ Booki pulls items from **pluggable sources** — Chrome / Safari / Firefox bookm
 
 ## 🚀 Install
 
+The recommended path — Booki is meant to be read, edited, and tweaked:
+
 ```bash
 git clone https://github.com/barakbl/booki.git
 cd booki
@@ -45,6 +47,30 @@ pip install -r requirements.txt
 
 # Start from the documented example. Edit it to taste.
 cp config.toml.example config.toml
+```
+
+### One-liner installer (less recommended)
+
+```sh
+curl -sSfL https://raw.githubusercontent.com/barakbl/booki/main/install/install.sh | sh
+```
+
+This is here for users who want to *try* Booki without thinking about Python venvs. Booki is a small, hackable, single-codebase tool — by philosophy you'll want the editable `git clone` flow above. Use the installer when you want a turnkey setup; use `git clone` when you want to live in the code.
+
+The installer is **idempotent** (re-run any time to update) and **XDG-compliant**:
+
+- Clones / fast-forwards the repo to `$XDG_DATA_HOME/booki` (default `~/.local/share/booki`).
+- Creates a virtualenv at `$XDG_DATA_HOME/booki/.venv` and `pip install -r requirements.txt` inside it — your system Python is never touched.
+- Copies `config.toml.example` → `$XDG_CONFIG_HOME/booki/config.toml` (only if you don't already have one).
+- Drops a `booki` wrapper in `$XDG_BIN_HOME` (default `~/.local/bin`) that invokes the venv's python on the dispatcher script.
+- Detects your shell (fish / zsh / bash) and idempotently appends a PATH export *and* the matching `shells/booki.fish` / `shells/booki.zsh` source line — completion works without duplicate entries on re-runs.
+- Closes by suggesting `brew` / `apt` / `dnf` / `pacman` commands for the optional binaries Booki can use (`ffmpeg`, `fzf`, `ollama`).
+
+Pin a branch or fork via env vars:
+
+```sh
+BOOKI_REPO=https://github.com/you/booki.git BOOKI_BRANCH=feature \
+  curl -sSfL https://raw.githubusercontent.com/barakbl/booki/main/install/install.sh | sh
 ```
 
 Optional cloud-LLM extras:

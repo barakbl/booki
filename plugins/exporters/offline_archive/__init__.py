@@ -223,8 +223,15 @@ class OfflineArchiveExporter(Exporter):
         sub_lang = (options.get("sub_lang") or "en").strip() or "en"
 
         artifact_dir = task.artifact_dir
-        out_dir = artifact_dir / "out"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        # Working tree is shaped like the final zip:
+        #   zip_root/
+        #     index.html       ← the themed listing
+        #     files/           ← every per-item download lives in here so
+        #                        the root stays clean.
+        zip_root = artifact_dir / "out"
+        files_dir = zip_root / "files"
+        zip_root.mkdir(parents=True, exist_ok=True)
+        files_dir.mkdir(parents=True, exist_ok=True)
 
         # Lazy-init Playwright once for the whole task.
         pw_ctx: Any = None
@@ -264,7 +271,7 @@ class OfflineArchiveExporter(Exporter):
                 for attempt in (1, 2):
                     try:
                         produced = _archive_one(
-                            it, plan, slug, out_dir,
+                            it, plan, slug, files_dir,
                             pw_ctx=pw_ctx,
                             video_quality=video_quality,
                             include_subs=include_subs,
@@ -315,18 +322,19 @@ class OfflineArchiveExporter(Exporter):
             theme_vars=theme_vars,
             generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
         )
-        (out_dir / "index.html").write_text(html, encoding="utf-8")
+        (zip_root / "index.html").write_text(html, encoding="utf-8")
 
-        # Zip it. ZIP_STORED keeps already-compressed files un-recompressed.
+        # Zip layout: index.html at the root, every download under files/.
+        # ZIP_STORED keeps already-compressed files un-recompressed.
         ts = datetime.now().strftime("%Y-%m-%dT%H-%M")
         zip_path = artifact_dir / f"booki-archive-{ts}.zip"
         task.log(f"zipping {len(rendered)} item{'' if len(rendered) == 1 else 's'} → {zip_path.name}")
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as z:
-            for p in sorted(out_dir.rglob("*")):
+            for p in sorted(zip_root.rglob("*")):
                 if p.is_file():
-                    z.write(p, arcname=p.relative_to(out_dir))
+                    z.write(p, arcname=p.relative_to(zip_root))
 
-        shutil.rmtree(out_dir, ignore_errors=True)
+        shutil.rmtree(zip_root, ignore_errors=True)
 
         suffix = f", {len(skipped)} skipped" if skipped else ""
         task.log(f"done: {zip_path.name} ({len(rendered)} items{suffix})")

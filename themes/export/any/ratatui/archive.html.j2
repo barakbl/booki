@@ -76,6 +76,17 @@ html, body {
   color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em;
 }
 
+.tui-row-links {
+  display: flex; gap: 8px; margin-top: 2px; font-size: 12px;
+}
+.tui-link {
+  text-decoration: none; color: var(--link);
+  border: 1px solid color-mix(in srgb, var(--link) 35%, transparent);
+  padding: 0 6px; border-radius: 2px;
+}
+.tui-link.ext { color: var(--secondary); border-color: color-mix(in srgb, var(--secondary) 45%, transparent); }
+.tui-link:hover { background: color-mix(in srgb, var(--link) 12%, transparent); }
+.tui-link.ext:hover { background: color-mix(in srgb, var(--secondary) 12%, transparent); }
 .tui-skipped {
   margin-top: 16px;
   border: 1px solid color-mix(in srgb, var(--danger) 60%, var(--border));
@@ -106,17 +117,21 @@ html, body {
         {%- for it in items %}
         <li class="tui-row" data-search="{{ ((it.title or '') ~ ' ' ~ (it.url or '') ~ ' ' ~ (it.kind or ''))|lower }}">
           <span class="tui-row-num">{{ '%03d' | format(loop.index) }}</span>
-          <a class="tui-row-thumb" href="./{{ it.filename }}" target="_blank" rel="noopener">
-            {%- if it.thumb %}<img src="./{{ it.thumb }}" alt="">
+          <a class="tui-row-thumb" href="./files/{{ it.filename }}" target="_blank" rel="noopener">
+            {%- if it.thumb %}<img src="./files/{{ it.thumb }}" alt="">
             {%- else %}{{ {'video':'🎬','photo':'🖼','document':'📄'}.get(it.plan, '🔖') }}
             {%- endif %}
           </a>
           <div class="tui-row-body">
-            <a class="tui-row-title" href="./{{ it.filename }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
+            <a class="tui-row-title" href="./files/{{ it.filename }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
+            <div class="tui-row-links">
+              <a class="tui-link local" href="./files/{{ it.filename }}" target="_blank" rel="noopener">[ offline ]</a>
+              {% if it.url %}<a class="tui-link ext" href="{{ it.url }}" target="_blank" rel="noopener noreferrer">[ original ↗ ]</a>{% endif %}
+            </div>
             <div class="tui-row-meta">{{ it.url }}</div>
             {% if it.extra_files %}
             <div class="tui-row-extras">
-              {%- for f in it.extra_files %}<a href="./{{ f }}" target="_blank" rel="noopener">📎 {{ f }}</a>{% endfor %}
+              {%- for f in it.extra_files %}<a href="./files/{{ f }}" target="_blank" rel="noopener">📎 {{ f }}</a>{% endfor %}
             </div>
             {% endif %}
           </div>

@@ -88,6 +88,23 @@ input.filter:focus { border-color: var(--accent); }
   margin-top: 2px;
 }
 .summary { margin-top: 5px; color: color-mix(in srgb, var(--text) 78%, transparent); }
+.links {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin-top: 6px; font-size: 13px;
+}
+.local-link, .ext-link {
+  text-decoration: none;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--link) 30%, transparent);
+  color: var(--link);
+}
+.local-link:hover, .ext-link:hover {
+  background: color-mix(in srgb, var(--link) 10%, transparent);
+  text-decoration: none;
+}
+.ext-link { color: var(--secondary); border-color: color-mix(in srgb, var(--secondary) 35%, transparent); }
+.ext-link:hover { background: color-mix(in srgb, var(--secondary) 10%, transparent); }
 .extras { margin-top: 6px; font-size: 12px; }
 .extras a { margin-right: 10px; color: var(--accent); }
 .skipped {
@@ -121,21 +138,24 @@ input.filter:focus { border-color: var(--accent); }
   <ul class="items" id="results">
     {%- for it in items %}
     <li class="item" data-search="{{ ((it.title or '') ~ ' ' ~ (it.url or '') ~ ' ' ~ (it.kind or ''))|lower }}">
-      <a class="thumb" href="./{{ it.filename }}" target="_blank" rel="noopener">
-        {%- if it.thumb %}<img src="./{{ it.thumb }}" alt="">
+      <a class="thumb" href="./files/{{ it.filename }}" target="_blank" rel="noopener">
+        {%- if it.thumb %}<img src="./files/{{ it.thumb }}" alt="">
         {%- else %}{{ {'video':'🎬','photo':'🖼','document':'📄'}.get(it.plan, '🔖') }}
         {%- endif %}
       </a>
       <div>
         <div class="head">
-          <a class="title" href="./{{ it.filename }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
+          <a class="title" href="./files/{{ it.filename }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
           <span class="kind">{{ it.plan }}</span>
         </div>
-        <div class="url">{{ it.url }}</div>
+        <div class="links">
+          <a class="local-link" href="./files/{{ it.filename }}" target="_blank" rel="noopener">📂 offline copy</a>
+          {% if it.url %}<a class="ext-link" href="{{ it.url }}" target="_blank" rel="noopener noreferrer">🌐 open original ↗</a>{% endif %}
+        </div>
         {% if it.summary %}<div class="summary">{{ it.summary }}</div>{% endif %}
         {% if it.extra_files %}
         <div class="extras">
-          {%- for f in it.extra_files %}<a href="./{{ f }}" target="_blank" rel="noopener">📎 {{ f }}</a>{% endfor %}
+          {%- for f in it.extra_files %}<a href="./files/{{ f }}" target="_blank" rel="noopener">📎 {{ f }}</a>{% endfor %}
         </div>
         {% endif %}
       </div>

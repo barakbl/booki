@@ -109,6 +109,15 @@ booki.tabs.implement("documents", {
   onShow(el) {
     render(el);
     el.querySelector("#docFindInput")?.focus();
+    booki.ui?.refreshExportButton?.();
+  },
+  // Expose the currently-rendered document ids so the host's "⬇ Export"
+  // header button activates and the wizard filters exporters by kind.
+  getSelection() {
+    const root = document.getElementById("docResults");
+    if (!root) return { kind: "document", ids: [] };
+    const ids = [...root.querySelectorAll("[data-id]")].map(n => n.dataset.id);
+    return { kind: "document", ids };
   },
 });
 
@@ -190,6 +199,9 @@ function render(el) {
       }
     });
   });
+  // Tell the host to re-read getSelection() so "⬇ Export N items" updates
+  // as the user types in the filter / switches view.
+  booki.ui?.refreshExportButton?.();
 }
 
 function renderList(rows) {

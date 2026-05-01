@@ -75,6 +75,18 @@ input.filter:focus { border-color: var(--secondary); }
   font-size: 11px; font-weight: 700; text-transform: uppercase;
 }
 .url { font-size: 12px; color: var(--muted); word-break: break-all; }
+.links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; font-size: 13px; }
+.local-link, .ext-link {
+  text-decoration: none; padding: 4px 12px;
+  border-radius: 999px; border: 2px solid var(--accent);
+  color: var(--accent); font-weight: 700;
+  background: #fff;
+  box-shadow: 2px 2px 0 0 color-mix(in srgb, var(--accent) 30%, transparent);
+  transition: transform 100ms;
+}
+.local-link:hover, .ext-link:hover { transform: translateY(-1px); }
+.ext-link { color: var(--secondary); border-color: var(--secondary);
+  box-shadow: 2px 2px 0 0 color-mix(in srgb, var(--secondary) 30%, transparent); }
 .summary { margin-top: 4px; font-size: 14px; }
 .extras { margin-top: 6px; font-size: 12px; }
 .extras a { color: var(--accent); margin-right: 10px; }
@@ -113,21 +125,24 @@ input.filter:focus { border-color: var(--secondary); }
   <ul class="items" id="results">
     {%- for it in items %}
     <li class="item" data-search="{{ ((it.title or '') ~ ' ' ~ (it.url or '') ~ ' ' ~ (it.kind or ''))|lower }}">
-      <a class="thumb" href="./{{ it.filename }}" target="_blank" rel="noopener">
-        {%- if it.thumb %}<img src="./{{ it.thumb }}" alt="">
+      <a class="thumb" href="./files/{{ it.filename }}" target="_blank" rel="noopener">
+        {%- if it.thumb %}<img src="./files/{{ it.thumb }}" alt="">
         {%- else %}{{ {'video':'🎬','photo':'🖼','document':'📄'}.get(it.plan, '🎁') }}
         {%- endif %}
       </a>
       <div>
         <div class="head">
-          <a class="title" href="./{{ it.filename }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
+          <a class="title" href="./files/{{ it.filename }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
           <span class="kind">{{ it.plan }}</span>
         </div>
-        <div class="url">{{ it.url }}</div>
+        <div class="links">
+          <a class="local-link" href="./files/{{ it.filename }}" target="_blank" rel="noopener">📂 offline copy</a>
+          {% if it.url %}<a class="ext-link" href="{{ it.url }}" target="_blank" rel="noopener noreferrer">🌐 open original ↗</a>{% endif %}
+        </div>
         {% if it.summary %}<div class="summary">{{ it.summary }}</div>{% endif %}
         {% if it.extra_files %}
         <div class="extras">
-          {%- for f in it.extra_files %}<a href="./{{ f }}" target="_blank" rel="noopener">📎 {{ f }}</a>{% endfor %}
+          {%- for f in it.extra_files %}<a href="./files/{{ f }}" target="_blank" rel="noopener">📎 {{ f }}</a>{% endfor %}
         </div>
         {% endif %}
       </div>
