@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en"{% if rtl %} dir="rtl"{% endif %}>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,6 +10,8 @@
   --text: {{ theme_vars.text }};
   --link: {{ theme_vars.link }};
   --accent: {{ theme_vars.accent }};
+  --secondary: {{ theme_vars.secondary or theme_vars.accent }};
+  --muted: {{ theme_vars.muted or 'color-mix(in srgb, ' ~ theme_vars.text ~ ' 55%, transparent)' }};
 }
 * { box-sizing: border-box; }
 html, body {
@@ -29,7 +31,7 @@ h1 {
   margin: 0 0 6px;
 }
 .meta {
-  color: color-mix(in srgb, var(--text) 55%, transparent);
+  color: var(--muted);
   font-size: 13px;
   margin-bottom: 22px;
 }
@@ -50,7 +52,7 @@ input.filter:focus { border-color: var(--accent); }
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: color-mix(in srgb, var(--text) 55%, transparent);
+  color: var(--muted);
   margin: 28px 0 8px;
   padding-bottom: 6px;
   border-bottom: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
@@ -85,11 +87,11 @@ input.filter:focus { border-color: var(--accent); }
 }
 .item-source {
   font-size: 12px;
-  color: color-mix(in srgb, var(--text) 50%, transparent);
+  color: var(--muted);
 }
 .item-url {
   font-size: 12px;
-  color: color-mix(in srgb, var(--text) 50%, transparent);
+  color: var(--muted);
   word-break: break-all;
   margin-top: 2px;
 }
@@ -107,20 +109,30 @@ input.filter:focus { border-color: var(--accent); }
   font-size: 11px;
   padding: 2px 9px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--secondary) 14%, transparent);
+  color: var(--secondary);
 }
 .empty {
-  color: color-mix(in srgb, var(--text) 50%, transparent);
+  color: var(--muted);
   margin-top: 20px;
 }
+.page-footer {
+  margin-top: 40px;
+  padding-top: 16px;
+  border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+[dir="rtl"] body { text-align: right; }
+[dir="rtl"] .item-head, [dir="rtl"] .tags { flex-direction: row-reverse; }
 </style>
 </head>
 <body>
 <main class="wrap">
   <h1>{{ title }}</h1>
   <p class="meta">{{ item_count }} item{% if item_count != 1 %}s{% endif %} · generated {{ generated_at }}</p>
-  <input class="filter" type="search" id="filter" placeholder="Filter… (title, URL, tag, summary)">
+  {% if show_search %}<input class="filter" type="search" id="filter" placeholder="Filter… (title, URL, tag, summary)">{% endif %}
   <div id="results">
 {%- for g in groups %}
     <section class="group" data-group="{{ g.name }}">
@@ -146,7 +158,9 @@ input.filter:focus { border-color: var(--accent); }
 {%- endfor %}
   </div>
   <p class="empty" id="empty" hidden>No matches.</p>
+  {% if footer_text %}<footer class="page-footer">{{ footer_text }}</footer>{% endif %}
 </main>
+{% if show_search %}
 <script>
 const f = document.getElementById('filter');
 const empty = document.getElementById('empty');
@@ -168,5 +182,6 @@ f.addEventListener('input', () => {
   empty.hidden = any;
 });
 </script>
+{% endif %}
 </body>
 </html>

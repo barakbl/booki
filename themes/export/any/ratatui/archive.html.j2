@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en"{% if rtl %} dir="rtl"{% endif %}>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<style>
+:root {
+  --bg: {{ theme_vars.bg }};
+  --fg: {{ theme_vars.text }};
+  --link: {{ theme_vars.link }};
+  --accent: {{ theme_vars.accent }};
+  --secondary: {{ theme_vars.secondary or theme_vars.accent }};
+  --muted: {{ theme_vars.muted or 'color-mix(in srgb, ' ~ theme_vars.text ~ ' 50%, transparent)' }};
+  --danger: {{ theme_vars.danger or '#f7768e' }};
+  --border: color-mix(in srgb, var(--fg) 24%, transparent);
+  --dim: var(--muted);
+  --sel-bg: color-mix(in srgb, var(--secondary) 22%, transparent);
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: var(--bg); color: var(--fg);
+  font: 14px/1.45 "JetBrains Mono", "SF Mono", "Fira Code", "Menlo", monospace;
+  min-height: 100vh;
+}
+::selection { background: var(--accent); color: var(--bg); }
+
+.tui { max-width: 1100px; margin: 0 auto; padding: 18px 18px 60px; }
+.tui-block { position: relative; border: 1px solid var(--border); margin-bottom: 14px; }
+.tui-block-title {
+  position: absolute; top: -10px; left: 14px;
+  background: var(--bg); padding: 0 10px;
+  color: var(--accent); font-weight: 700; letter-spacing: 0.04em;
+}
+.tui-block-body { padding: 14px 16px; }
+
+.tui-input {
+  display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--border); padding: 4px 10px; margin-bottom: 14px;
+}
+.tui-input::before { content: "▶"; color: var(--secondary); font-size: 11px; }
+.tui-input input {
+  flex: 1; background: transparent; border: none; outline: none;
+  color: var(--fg); font: inherit;
+}
+.tui-input input::placeholder { color: var(--dim); }
+
+.tui-list { list-style: none; margin: 0; padding: 0; }
+.tui-row {
+  display: grid;
+  grid-template-columns: 4ch 64px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 10px;
+  border-left: 2px solid transparent;
+}
+.tui-row + .tui-row { border-top: 1px dashed color-mix(in srgb, var(--fg) 8%, transparent); }
+.tui-row:hover { background: var(--sel-bg); border-left-color: var(--secondary); }
+.tui-row-num { color: var(--dim); text-align: right; font-variant-numeric: tabular-nums; }
+.tui-row-thumb {
+  width: 64px; height: 40px; border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; overflow: hidden; background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.tui-row-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tui-row-body { min-width: 0; }
+.tui-row-title { color: var(--link); text-decoration: none; font-weight: 600; }
+.tui-row-title:hover { text-decoration: underline; }
+.tui-row-meta { color: var(--dim); font-size: 12px; word-break: break-all; }
+.tui-row-extras { font-size: 12px; }
+.tui-row-extras a { color: var(--accent); margin-right: 8px; }
+.tui-kind {
+  font-size: 10px; padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em;
+}
+
+.tui-skipped {
+  margin-top: 16px;
+  border: 1px solid color-mix(in srgb, var(--danger) 60%, var(--border));
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  padding: 12px 14px; font-size: 13px;
+}
+.tui-skipped h2 { margin: 0 0 6px; font-size: 13px; color: var(--danger); }
+.tui-page-footer {
+  margin-top: 16px; padding-top: 10px; text-align: center;
+  color: var(--dim); font-size: 12px; border-top: 1px dashed var(--border);
+}
+[dir="rtl"] body { text-align: right; }
+[dir="rtl"] .tui-row { direction: rtl; }
+.tui-skipped ul { margin: 0; padding-left: 18px; }
+</style>
+</head>
+<body>
+<main class="tui">
+  <div class="tui-block">
+    <span class="tui-block-title">┤ {{ title }} ├</span>
+    <div class="tui-block-body">
+      {% if show_search %}
+      <div class="tui-input">
+        <input id="filter" type="search" placeholder="filter…">
+      </div>
+      {% endif %}
+      <ul class="tui-list" id="results">
+        {%- for it in items %}
+        <li class="tui-row" data-search="{{ ((it.title or '') ~ ' ' ~ (it.url or '') ~ ' ' ~ (it.kind or ''))|lower }}">
+          <span class="tui-row-num">{{ '%03d' | format(loop.index) }}</span>
+          <a class="tui-row-thumb" href="./{{ it.filename }}" target="_blank" rel="noopener">
+            {%- if it.thumb %}<img src="./{{ it.thumb }}" alt="">
+            {%- else %}{{ {'video':'🎬','photo':'🖼','document':'📄'}.get(it.plan, '🔖') }}
+            {%- endif %}
+          </a>
+          <div class="tui-row-body">
+            <a class="tui-row-title" href="./{{ it.filename }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
+            <div class="tui-row-meta">{{ it.url }}</div>
+            {% if it.extra_files %}
+            <div class="tui-row-extras">
+              {%- for f in it.extra_files %}<a href="./{{ f }}" target="_blank" rel="noopener">📎 {{ f }}</a>{% endfor %}
+            </div>
+            {% endif %}
+          </div>
+          <span class="tui-kind">{{ it.plan }}</span>
+        </li>
+        {%- endfor %}
+      </ul>
+      {% if skipped %}
+      <section class="tui-skipped">
+        <h2>── {{ skipped|length }} skipped ──</h2>
+        <ul>
+          {%- for s in skipped %}
+          <li><strong>{{ s.title }}</strong> — {{ s.reason }}</li>
+          {%- endfor %}
+        </ul>
+      </section>
+      {% endif %}
+      {% if footer_text %}<div class="tui-page-footer">─ {{ footer_text }} ─</div>{% endif %}
+    </div>
+  </div>
+</main>
+{% if show_search %}
+<script>
+const f = document.getElementById('filter');
+f.focus();
+f.addEventListener('input', () => {
+  const q = f.value.trim().toLowerCase();
+  document.querySelectorAll('.tui-row').forEach(li => {
+    li.style.display = (!q || li.dataset.search.includes(q)) ? '' : 'none';
+  });
+});
+</script>
+{% endif %}
+</body>
+</html>

@@ -30,3 +30,8 @@ pyyaml>=6.0
 # download.py — optional, only if you download videos locally.
 # Requires ffmpeg on PATH for muxing + audio extraction.
 # yt-dlp>=2024.8.0
+
+# offline_archive exporter — optional. Without Playwright the exporter
+# falls back to plain HTTP fetches for HTML pages (JS-rendered sites
+# won't look right). After install: `playwright install chromium` (~300MB).
+# playwright>=1.45.0

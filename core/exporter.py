@@ -135,11 +135,43 @@ class Theme:
             "description": self.description,
             "kind": self.kind,
             "vars": [v.to_dict() for v in self.vars],
+            "has_thumbnail": (self.path / "thumbnail.png").is_file(),
         }
 
 
 def _themes_dir(kind: str, themes_root: Path) -> Path:
     return themes_root / kind
+
+
+def _load_colorschemes(themes_root: Path) -> list[dict]:
+    """
+    Read `<themes_root>/colorschemes.toml` and return a list of
+    {slug, name, description, colors} entries. Missing file → []. Malformed
+    file → [] with a warning logged (UI just shows no scheme picker).
+    """
+    p = themes_root / "colorschemes.toml"
+    if not p.is_file():
+        return []
+    try:
+        with open(p, "rb") as f:
+            data = tomllib.load(f)
+    except Exception:
+        log.exception("colorschemes_parse_failed", extra={"path": str(p)})
+        return []
+    out: list[dict] = []
+    for s in data.get("schemes") or []:
+        if not isinstance(s, dict):
+            continue
+        slug = str(s.get("slug") or "").strip()
+        if not slug:
+            continue
+        out.append({
+            "slug": slug,
+            "name": str(s.get("name") or slug),
+            "description": str(s.get("description") or ""),
+            "colors": {k: str(v) for k, v in (s.get("colors") or {}).items()},
+        })
+    return out
 
 
 def list_themes(kind: str, themes_root: Path) -> list[Theme]:
@@ -184,6 +216,12 @@ class Exporter(ABC):
     uses_themes: bool = False
     options_schema: list[dict] = []        # each item = {name, type, label, default, options?, help?}
 
+    # When True the exporter can render nested folders (the wizard's Refine
+    # step will tell the user "this exporter supports hierarchy"). Even when
+    # False the exporter still receives the tree-flattened item order, so
+    # manual reorder works for flat exporters too.
+    supports_hierarchy: bool = False
+
     def applies_to(self, kind: str) -> bool:
         if "any" in self.applicable_kinds:
             return True
@@ -193,9 +231,16 @@ class Exporter(ABC):
         return kind in self.applicable_kinds
 
     # Implement one of these in subclasses:
+    #
+    # `tree` (when not None) is the user-edited folder/item structure from
+    # the wizard's Refine step. For exporters with `supports_hierarchy=True`
+    # it dictates output structure; otherwise items are also pre-sorted in
+    # tree-flattened order, so flat exporters get the user's manual ordering
+    # for free.
 
     def run_immediate(self, items: list[dict], options: dict,
-                      theme: Optional[Theme], theme_vars: dict
+                      theme: Optional[Theme], theme_vars: dict,
+                      tree: Optional[list] = None
                       ) -> tuple[bytes, str, str]:
         """Return (raw_bytes, filename, mime_type)."""
         raise NotImplementedError(
@@ -203,7 +248,8 @@ class Exporter(ABC):
 
     def run_background(self, items: list[dict], options: dict,
                        theme: Optional[Theme], theme_vars: dict,
-                       task: TaskHandle) -> Path:
+                       task: TaskHandle,
+                       tree: Optional[list] = None) -> Path:
         """Return the absolute path to the produced artifact file."""
         raise NotImplementedError(
             f"{type(self).__name__} declares background but does not implement run_background")
@@ -217,6 +263,35 @@ class Exporter(ABC):
         """
         return list(self.options_schema or [])
 
+    def runtime_notes(self) -> list[dict]:
+        """
+        Per-exporter notices the UI surfaces when this exporter is selected.
+        Each entry: {"level": "info" | "warning", "text": "..."} where text
+        may contain `inline code` and **bold**. Default: none.
+        """
+        return []
+
+    def preview(self, items: list[dict], options: dict,
+                theme: Optional[Theme], theme_vars: dict,
+                tree: Optional[list] = None) -> dict:
+        """
+        Build a UI preview of what `run_immediate` / `run_background` would
+        produce. Default behavior:
+          - immediate exporters: invoke run_immediate(); render bytes as html
+            or text depending on the mime type. Truncated to PREVIEW_TEXT_LINES
+            for plain-text formats.
+          - background exporters: empty manifest (override to populate).
+
+        Returns a JSON-shaped dict:
+          {"kind": "html" | "text" | "manifest" | "none",
+           "filename": str?, "mime": str?, "content": str?,
+           "manifest": [...], "truncated": bool, "preview_lines": int?}
+        """
+        if self.execution_mode == "immediate":
+            data, filename, mime = self.run_immediate(items, options, theme, theme_vars, tree=tree)
+            return _default_immediate_preview(data, filename, mime)
+        return {"kind": "manifest", "manifest": []}
+
     def to_dict(self) -> dict:
         return {
             "slug": self.slug,
@@ -225,8 +300,35 @@ class Exporter(ABC):
             "applicable_kinds": list(self.applicable_kinds),
             "execution_mode": self.execution_mode,
             "uses_themes": bool(self.uses_themes),
+            "supports_hierarchy": bool(self.supports_hierarchy),
             "options_schema": list(self.options_schema or []),
+            "runtime_notes": list(self.runtime_notes() or []),
         }
+
+
+PREVIEW_TEXT_LINES = 80
+
+
+def _default_immediate_preview(data: bytes, filename: str, mime: str) -> dict:
+    is_html = (mime or "").startswith("text/html")
+    is_textish = (mime or "").startswith("text/") or any(
+        s in (mime or "") for s in ("json", "yaml", "csv", "markdown", "xml")
+    )
+    if is_html:
+        return {"kind": "html", "filename": filename, "mime": mime,
+                "content": data.decode("utf-8", errors="replace"),
+                "truncated": False}
+    if is_textish:
+        text = data.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        truncated = len(lines) > PREVIEW_TEXT_LINES
+        if truncated:
+            text = "\n".join(lines[:PREVIEW_TEXT_LINES])
+        return {"kind": "text", "filename": filename, "mime": mime,
+                "content": text, "truncated": truncated,
+                "preview_lines": PREVIEW_TEXT_LINES if truncated else len(lines)}
+    return {"kind": "none", "filename": filename, "mime": mime,
+            "truncated": False}
 
 
 _REGISTRY: dict[str, type[Exporter]] = {}
@@ -368,6 +470,7 @@ class Task:
     theme: Optional[str] = None
     theme_vars: dict = field(default_factory=dict)
     item_ids: list[str] = field(default_factory=list)
+    tree: list = field(default_factory=list)
     log: str = ""
 
     def to_frontmatter(self) -> dict:
@@ -391,6 +494,7 @@ class Task:
             "theme": self.theme,
             "theme_vars": self.theme_vars,
             "item_ids": self.item_ids,
+            "tree": self.tree,
         }
 
     def to_api(self) -> dict:
@@ -457,6 +561,7 @@ class TaskStore:
             theme=fm.get("theme"),
             theme_vars=dict(fm.get("theme_vars") or {}),
             item_ids=list(fm.get("item_ids") or []),
+            tree=list(fm.get("tree") or []),
             log=body,
         )
 
@@ -572,11 +677,12 @@ class BackgroundRunner:
                 theme_kind = inst.applicable_kinds[0] if inst.applicable_kinds else "any"
                 theme = get_theme(theme_kind, t.theme, self.themes_root)
             theme_vars = theme.resolve_vars(t.theme_vars or {}) if theme else {}
-            items = self.item_resolver(t.item_ids)
+            items = order_items_by_tree(self.item_resolver(t.item_ids), t.tree)
 
             handle = TaskHandle(task_id=t.id, artifact_dir=artifact_dir, _store=self.store)
             handle.log(f"starting · exporter={t.exporter} · items={len(items)}")
-            artifact_path = inst.run_background(items, t.options, theme, theme_vars, handle)
+            artifact_path = inst.run_background(
+                items, t.options, theme, theme_vars, handle, tree=(t.tree or None))
             artifact_path = Path(artifact_path).resolve()
 
             # Refresh after potential progress writes.
@@ -639,11 +745,66 @@ class ExportRunRequest(BaseModel):
     theme_vars: dict = Field(default_factory=dict)
     options: dict = Field(default_factory=dict)
     item_ids: list[str] = Field(default_factory=list)
+    # Optional folder/item tree from the wizard's Refine step. Each node is
+    # {"type": "folder", "name": str, "children": [...]} or
+    # {"type": "item", "item_id": str}. When provided, items are reordered
+    # to match tree-flattened order; hierarchy-aware exporters also walk
+    # the structure to emit folders.
+    tree: Optional[list] = None
 
 
 class ExportOptionsRequest(BaseModel):
     exporter: str
     item_ids: list[str] = Field(default_factory=list)
+
+
+# ─── Tree helpers ─────────────────────────────────────────────────────────────
+
+def flatten_tree(tree: Optional[list]) -> list[tuple[list[str], str]]:
+    """
+    Walk `tree` depth-first, returning (path, item_id) for each item node in
+    display order. `path` is the list of folder names from root to the
+    item's parent (empty for items at the top level). Folders without items
+    contribute nothing.
+    """
+    out: list[tuple[list[str], str]] = []
+
+    def walk(nodes, path):
+        for n in nodes or []:
+            t = n.get("type") if isinstance(n, dict) else None
+            if t == "folder":
+                child_path = path + [str(n.get("name") or "")]
+                walk(n.get("children") or [], child_path)
+            elif t == "item":
+                iid = n.get("item_id")
+                if iid:
+                    out.append((list(path), str(iid)))
+
+    walk(tree or [], [])
+    return out
+
+
+def order_items_by_tree(items: list[dict], tree: Optional[list]) -> list[dict]:
+    """
+    Return items in tree-flattened order with `_path` populated. An item
+    that appears in N tree folders shows up N times (intentional for tag/
+    list groupings). Items NOT referenced anywhere in the tree are dropped
+    — the wizard's Refine step is the user's chance to exclude items.
+    """
+    if not tree:
+        return items
+    by_id: dict[str, dict] = {}
+    for it in items:
+        by_id[str(it.get("id") or "")] = it
+    out: list[dict] = []
+    for path, iid in flatten_tree(tree):
+        it = by_id.get(iid)
+        if it is None:
+            continue
+        copy = dict(it)
+        copy["_path"] = list(path)
+        out.append(copy)
+    return out
 
 
 # ─── FastAPI wiring ───────────────────────────────────────────────────────────
@@ -720,6 +881,49 @@ def attach_routes(app: FastAPI, cfg: dict, config_path: Path, svc) -> None:
             raise HTTPException(404, f"Theme not found: {kind}/{slug}")
         return t.to_dict()
 
+    @app.get("/api/export/themes/{kind}/{slug}/thumbnail")
+    def get_theme_thumbnail(kind: str, slug: str):
+        if kind not in VALID_KINDS:
+            raise HTTPException(404, f"Unknown kind: {kind}")
+        t = get_theme(kind, slug, themes_root)
+        if t is None:
+            raise HTTPException(404, f"Theme not found: {kind}/{slug}")
+        png = t.path / "thumbnail.png"
+        if not png.is_file():
+            raise HTTPException(404, "No thumbnail for this theme")
+        return FileResponse(png, media_type="image/png")
+
+    @app.get("/api/export/colorschemes")
+    def list_colorschemes():
+        return _load_colorschemes(themes_root)
+
+    # ── Preview ─────────────────────────────────────────────────────────
+
+    @app.post("/api/export/preview")
+    def export_preview(req: ExportRunRequest):
+        cls = get_exporter(req.exporter)
+        if cls is None:
+            raise HTTPException(404, f"Unknown exporter: {req.exporter}")
+        if not req.item_ids:
+            raise HTTPException(400, "item_ids is empty")
+        inst = cls()
+        theme = None
+        if inst.uses_themes and req.theme:
+            theme_kind = inst.applicable_kinds[0] if inst.applicable_kinds else "any"
+            theme = get_theme(theme_kind, req.theme, themes_root)
+            if theme is None:
+                raise HTTPException(404, f"Theme not found: {theme_kind}/{req.theme}")
+        theme_vars = theme.resolve_vars(req.theme_vars or {}) if theme else {}
+        items = order_items_by_tree(_resolve(req.item_ids), req.tree)
+        if not items:
+            raise HTTPException(400, "No items resolved from item_ids")
+        try:
+            return inst.preview(items, req.options, theme, theme_vars, tree=req.tree)
+        except Exception as e:
+            log.exception("preview_failed",
+                          extra={"exporter": req.exporter, "item_count": len(items)})
+            raise HTTPException(500, f"Preview failed: {type(e).__name__}: {e}")
+
     # ── Run ─────────────────────────────────────────────────────────────
 
     @app.post("/api/export/run")
@@ -740,12 +944,13 @@ def attach_routes(app: FastAPI, cfg: dict, config_path: Path, svc) -> None:
         theme_vars = theme.resolve_vars(req.theme_vars or {}) if theme else {}
 
         if inst.execution_mode == "immediate":
-            items = _resolve(req.item_ids)
+            items = order_items_by_tree(_resolve(req.item_ids), req.tree)
             if not items:
                 raise HTTPException(400, "No items resolved from item_ids")
             t0 = time.monotonic()
             try:
-                data, filename, mime = inst.run_immediate(items, req.options, theme, theme_vars)
+                data, filename, mime = inst.run_immediate(
+                    items, req.options, theme, theme_vars, tree=req.tree)
             except Exception as e:
                 log.exception("immediate_export_failed",
                               extra={"exporter": req.exporter, "item_count": len(items)})
@@ -774,6 +979,7 @@ def attach_routes(app: FastAPI, cfg: dict, config_path: Path, svc) -> None:
             theme=req.theme,
             theme_vars=dict(req.theme_vars or {}),
             item_ids=list(req.item_ids),
+            tree=list(req.tree) if req.tree else [],
             progress_total=len(req.item_ids),
         )
         store.write(task)

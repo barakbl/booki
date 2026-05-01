@@ -239,6 +239,181 @@ function highlight(text, matches) {
   return out;
 }
 
+// ─── View-mode toggle (list / grid / table) ────────────────────────
+//
+// A small button group every results-bearing tab (Search, Photos, Videos,
+// Ask) renders next to its search box. The active mode persists in
+// `localStorage("booki.view.<tab-id>")`. Each tab provides:
+//   - a list renderer (its own — keeps detailed per-tab affordances like
+//     score chips for Search or duration overlays for Videos),
+//   - whatever it wants for grid (Photos/Videos keep their image-thumb
+//     grids; Search/Ask use the generic favicon-glyph grid),
+//   - the generic table renderer below for table mode.
+
+const VIEW_MODES = [
+  { id: "list",  glyph: "≡", label: "List" },
+  { id: "grid",  glyph: "▦", label: "Grid" },
+  { id: "table", glyph: "⊞", label: "Table" },
+];
+
+function _viewModeFor(tabId, fallback = "list") {
+  try {
+    const v = localStorage.getItem(`booki.view.${tabId}`);
+    if (v && VIEW_MODES.some(m => m.id === v)) return v;
+  } catch {}
+  return fallback;
+}
+
+function _saveViewMode(tabId, mode) {
+  try { localStorage.setItem(`booki.view.${tabId}`, mode); } catch {}
+}
+
+function viewToggleHtml(tabId, allowed = ["list", "grid", "table"], fallback = "list") {
+  const cur = _viewModeFor(tabId, fallback);
+  const buttons = VIEW_MODES
+    .filter(m => allowed.includes(m.id))
+    .map(m =>
+      `<button type="button" class="view-btn ${m.id === cur ? "active" : ""}"
+               data-view="${m.id}" title="${escapeHtml(m.label)} view"
+               aria-pressed="${m.id === cur ? "true" : "false"}">
+        <span class="view-glyph" aria-hidden="true">${m.glyph}</span>
+        <span class="view-label">${escapeHtml(m.label)}</span>
+      </button>`
+    ).join("");
+  return `<div class="view-toggle" data-tab="${escapeHtml(tabId)}" role="group" aria-label="View mode">${buttons}</div>`;
+}
+
+function wireViewToggle(rootEl, tabId, onChange) {
+  rootEl.querySelectorAll(`.view-toggle[data-tab="${tabId}"] .view-btn`).forEach(btn => {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.view;
+      _saveViewMode(tabId, mode);
+      btn.parentElement.querySelectorAll(".view-btn").forEach(b => {
+        b.classList.toggle("active", b === btn);
+        b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+      });
+      onChange?.(mode);
+    });
+  });
+}
+
+function _bmSourceLabel(bm) {
+  return sourceLabels(bm).join(", ") || (bm.source || "—");
+}
+
+// Generic table renderer — name / source / type / importance / tags.
+// Click → openDetail(id). Pass opts.onClick to override.
+function renderItemsTable(host, items, opts = {}) {
+  const onClick = opts.onClick || ((bm) => openDetail(bm.id));
+  host.classList.add("items-host");
+  if (!items.length) { host.innerHTML = ""; return; }
+  const rows = items.map(bm => {
+    const kind = bm.kind || "bookmark";
+    const tags = (bm.tags || []).slice(0, 4).map(t => escapeHtml(t)).join(", ");
+    const imp = bm.importance > 0 ? `★${bm.importance}` : "";
+    return `<tr data-id="${escapeHtml(bm.id)}">
+      <td class="col-glyph">${KIND_GLYPH[kind] || "🔖"}</td>
+      <td class="col-name">
+        <div class="t-name">${escapeHtml(bm.title || bm.url || "(untitled)")}</div>
+        <div class="t-url">${escapeHtml(bm.url || "")}</div>
+      </td>
+      <td class="col-source">${escapeHtml(_bmSourceLabel(bm))}</td>
+      <td class="col-kind">${escapeHtml(kind)}</td>
+      <td class="col-imp">${imp}</td>
+      <td class="col-tags">${tags}</td>
+    </tr>`;
+  }).join("");
+  host.innerHTML = `
+    <table class="items-table">
+      <thead>
+        <tr><th></th><th>Name</th><th>Source</th><th>Type</th><th>★</th><th>Tags</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  host.querySelectorAll("tbody tr").forEach(tr => {
+    tr.addEventListener("click", () => {
+      const bm = items.find(b => b.id === tr.dataset.id);
+      if (bm) onClick(bm);
+    });
+  });
+}
+
+// Generic favicon/glyph grid for tabs that don't have a specialised
+// thumbnail (Search, Ask). Photos/Videos keep their richer grids.
+function renderItemsGrid(host, items, opts = {}) {
+  const onClick = opts.onClick || ((bm) => openDetail(bm.id));
+  host.classList.add("items-host");
+  if (!items.length) { host.innerHTML = ""; return; }
+  const tiles = items.map(bm => {
+    const kind = bm.kind || "bookmark";
+    const glyph = KIND_GLYPH[kind] || "🔖";
+    const tags = (bm.tags || []).slice(0, 3)
+      .map(t => `<span class="g-tag">${escapeHtml(t)}</span>`).join("");
+    const imp = bm.importance > 0 ? `<span class="g-imp">★${bm.importance}</span>` : "";
+    const fav = faviconUrl(bm.url);
+    return `<li class="g-tile" data-id="${escapeHtml(bm.id)}" tabindex="0">
+      <div class="g-thumb">
+        <img class="g-fav" src="${escapeHtml(fav)}" alt="" loading="lazy"
+             onerror="this.onerror=null;this.src='${DEFAULT_FAV}';">
+        <span class="g-glyph" title="${escapeHtml(kind)}">${glyph}</span>
+        ${imp}
+      </div>
+      <div class="g-meta">
+        <div class="g-title" title="${escapeHtml(bm.title || "")}">${escapeHtml(bm.title || "(untitled)")}</div>
+        <div class="g-source">${escapeHtml(_bmSourceLabel(bm))}</div>
+        <div class="g-tags">${tags}</div>
+      </div>
+    </li>`;
+  }).join("");
+  host.innerHTML = `<ul class="items-grid">${tiles}</ul>`;
+  host.querySelectorAll(".g-tile").forEach(tile => {
+    const bm = items.find(b => b.id === tile.dataset.id);
+    tile.addEventListener("click", () => bm && onClick(bm));
+    tile.addEventListener("keydown", (e) => {
+      if ((e.key === "Enter" || e.key === " ") && bm) {
+        e.preventDefault();
+        if (bm.url && e.key === "Enter") window.open(bm.url, "_blank", "noopener");
+        else onClick(bm);
+      }
+    });
+  });
+}
+
+// Compact list renderer for tabs that don't have a custom list (Photos,
+// Videos use this when the user picks "list" mode). Search keeps its
+// own rich rows so highlights / score chips survive.
+function renderItemsList(host, items, opts = {}) {
+  const onClick = opts.onClick || ((bm) => openDetail(bm.id));
+  host.classList.add("items-host");
+  if (!items.length) { host.innerHTML = ""; return; }
+  const rows = items.map(bm => {
+    const kind = bm.kind || "bookmark";
+    const glyph = KIND_GLYPH[kind] || "🔖";
+    const tags = (bm.tags || []).slice(0, 4)
+      .map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("");
+    const imp = bm.importance > 0 ? `<span class="star">★${bm.importance}</span>` : "";
+    return `<li class="items-row" data-id="${escapeHtml(bm.id)}">
+      <span class="row-glyph" title="${escapeHtml(kind)}">${glyph}</span>
+      <div class="row-body">
+        <div class="row-title">${escapeHtml(bm.title || bm.url || "(untitled)")}</div>
+        <div class="row-url">${escapeHtml(bm.url || "")}</div>
+        <div class="row-meta">
+          <span class="tag src">${escapeHtml(_bmSourceLabel(bm))}</span>
+          ${tags}
+        </div>
+      </div>
+      ${imp}
+    </li>`;
+  }).join("");
+  host.innerHTML = `<ul class="items-list">${rows}</ul>`;
+  host.querySelectorAll(".items-row").forEach(li => {
+    li.addEventListener("click", () => {
+      const bm = items.find(b => b.id === li.dataset.id);
+      if (bm) onClick(bm);
+    });
+  });
+}
+
 // ─── Load + render list ────────────────────────────────────────────
 
 async function loadStats() {
@@ -287,13 +462,15 @@ async function loadBookmarks() {
   const r = await fetch("/api/bookmarks");
   if (!r.ok) throw new Error(`GET /api/bookmarks → ${r.status}`);
   state.all = await r.json();
-  const enriched = state.all.filter(b => b.has_summary).length;
-  els.count.textContent = `${state.all.length} bookmarks · ${enriched} enriched`;
-  refreshAdvancedFilters();
-  applyFilter();
+  try {
+    const enriched = state.all.filter(b => b.has_summary).length;
+    els.count.textContent = `${state.all.length} bookmarks · ${enriched} enriched`;
+  } catch (e) { console.error(e); }
+  try { refreshAdvancedFilters(); } catch (e) { console.error(e); }
+  try { applyFilter(); } catch (e) { console.error(e); }
 
   // Re-fire onShow on whichever tab is active so it picks up the new data
-  // (this matters on first boot — `Tabs.activate` runs before bookmarks
+  // (matters on first boot — `Tabs.activate` may run before bookmarks
   // finish loading, so the active tab's first onShow saw an empty list).
   // Generic — works for built-in AND plugin tabs without hardcoded knowledge.
   const cur = Tabs.current && Tabs.get(Tabs.current());
@@ -561,11 +738,19 @@ function applyFilter() {
 function renderResults() {
   if (state.filtered.length === 0) {
     els.results.innerHTML = "";
+    els.results.className = "results";
     els.empty.classList.remove("hidden");
     return;
   }
   els.empty.classList.add("hidden");
 
+  const mode = _viewModeFor("search", "list");
+  const items = state.filtered.map(r => r.bm);
+  els.results.className = "results";
+  if (mode === "grid")  { renderItemsGrid(els.results, items); return; }
+  if (mode === "table") { renderItemsTable(els.results, items); return; }
+
+  // mode === "list" — keep rich rows with score chips + match highlights.
   const frag = document.createDocumentFragment();
   state.filtered.forEach((row, i) => {
     frag.appendChild(renderRow(row, i === state.selected));
@@ -1108,9 +1293,14 @@ const Tabs = (() => {
       return;
     }
     Object.assign(tab, behavior || {});
-    if (active && active.id === id && !tab._mounted) {
-      // Module loaded after activation — mount + show now.
-      _mountIfNeeded(tab);
+    if (active && active.id === id) {
+      // Module loaded after activation. The bootstrap stub-mount already
+      // ran ("Loading plugin tab…") and set _mounted=true, so the previous
+      // !_mounted guard skipped the real mount. Replace the stub now.
+      if (tab._container && typeof tab.mount === "function") {
+        try { tab.mount(tab._container); } catch (e) { console.error(e); }
+        tab._mounted = true;
+      }
       try { tab.onShow?.(tab._container); } catch (e) { console.error(e); }
     }
   }
@@ -1150,6 +1340,17 @@ const Tabs = (() => {
     _mountIfNeeded(tab);
     tab._container?.classList.add("active");
     try { tab.onShow?.(tab._container); } catch (e) { console.error(e); }
+
+    // Fallback re-render: if bookmark data hasn't loaded yet, this tab's
+    // first onShow saw an empty state.all. Hook into the next data update
+    // so the tab populates without the user having to switch tabs.
+    if (!state.all || state.all.length === 0) {
+      const off = window.booki?.bookmarks?.onChange?.(() => {
+        try { tab.onShow?.(tab._container); } catch (e) { console.error(e); }
+        try { off?.(); } catch {}
+      });
+    }
+
     document.querySelectorAll("#tabBar .tab-btn").forEach(btn => {
       btn.classList.toggle("active", btn.dataset.tab === id);
     });
@@ -1202,9 +1403,18 @@ window.booki.bookmarks = {
   all: () => state.all.slice(),
   byId: (id) => state.all.find(b => b.id === id) || null,
   // Subscribe to bookmark refreshes. Returns an unsubscribe function.
+  // If bookmarks are already loaded, the callback is invoked once on the
+  // microtask queue so late subscribers (plugin modules that finish loading
+  // after the initial fetch) still see the current data without waiting
+  // for the next change.
   onChange: (cb) => {
     if (typeof cb !== "function") return () => {};
     _bookmarkChangeListeners.add(cb);
+    if (state.all && state.all.length) {
+      Promise.resolve().then(() => {
+        try { cb(state.all); } catch (e) { console.error(e); }
+      });
+    }
     return () => _bookmarkChangeListeners.delete(cb);
   },
 };
@@ -1230,8 +1440,15 @@ window.booki.search = {
 
 Tabs.register({
   id: "search", label: "Search", icon: "🔎", order: 10,
-  // Search panel is pre-rendered in index.html — mount is a no-op.
-  mount() {},
+  // Search panel is pre-rendered in index.html — mount only injects the
+  // view-mode toggle into the pre-existing results toolbar.
+  mount() {
+    const tb = document.getElementById("searchViewToolbar");
+    if (tb) {
+      tb.innerHTML = viewToggleHtml("search", ["list", "grid", "table"], "list");
+      wireViewToggle(tb, "search", () => renderResults());
+    }
+  },
   onShow() { els.findInput?.focus?.(); refreshExportButton(); },
   getSelection: () => ({ kind: "any", ids: idsFromContainer("#results") }),
 });
@@ -1244,6 +1461,7 @@ Tabs.register({
         <header class="tab-header">
           <h2>🖼 Photos</h2>
           <p class="tab-sub" id="photoCount">—</p>
+          ${viewToggleHtml("photos", ["list", "grid", "table"], "grid")}
         </header>
         <div class="search-box scoped-search" id="photoSearchBox">
           <span class="search-icon">🔎</span>
@@ -1263,12 +1481,14 @@ Tabs.register({
         </p>
       </div>`;
 
+    wireViewToggle(el, "photos", () => renderPhotoGrid());
+
     const input = document.getElementById("photoFindInput");
     input.addEventListener("input", renderPhotoGrid);
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
-        const first = document.querySelector("#photoGrid .photo-tile");
+        const first = document.querySelector("#photoGrid [data-id]");
         if (first) {
           const id = first.dataset.id;
           const bm = state.all.find(b => b.id === id);
@@ -1374,6 +1594,21 @@ function renderPhotoGrid() {
   }
   noMatch?.classList.add("hidden");
 
+  const mode = _viewModeFor("photos", "grid");
+  // Wipe the host's class state — different modes set different classes
+  // (.photo-grid for the photo-specific image grid, .items-host for the
+  // generic list/table renderers).
+  grid.className = "";
+  if (mode === "table") {
+    renderItemsTable(grid, photos);
+    return;
+  }
+  if (mode === "list") {
+    renderItemsList(grid, photos);
+    return;
+  }
+  // mode === "grid" — keep the existing photo-thumbnail tile grid.
+  grid.classList.add("photo-grid");
   const frag = document.createDocumentFragment();
   for (const b of photos) {
     const li = document.createElement("li");
@@ -1422,6 +1657,7 @@ Tabs.register({
         <header class="tab-header">
           <h2>🎬 Videos</h2>
           <p class="tab-sub" id="videoCount">—</p>
+          ${viewToggleHtml("videos", ["list", "grid", "table"], "grid")}
         </header>
         <div class="search-box scoped-search" id="videoSearchBox">
           <span class="search-icon">🔎</span>
@@ -1440,12 +1676,14 @@ Tabs.register({
           No videos match your search.
         </p>`;
 
+    wireViewToggle(el, "videos", () => renderVideoGrid());
+
     const input = document.getElementById("videoFindInput");
     input.addEventListener("input", renderVideoGrid);
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
-        const first = document.querySelector("#videoGrid .video-tile");
+        const first = document.querySelector("#videoGrid [data-id]");
         if (first) {
           const id = first.dataset.id;
           const bm = state.all.find(b => b.id === id);
@@ -1528,6 +1766,18 @@ function renderVideoGrid() {
   }
   noMatch?.classList.add("hidden");
 
+  const mode = _viewModeFor("videos", "grid");
+  grid.className = "";
+  if (mode === "table") {
+    renderItemsTable(grid, videos);
+    return;
+  }
+  if (mode === "list") {
+    renderItemsList(grid, videos);
+    return;
+  }
+  // mode === "grid" — keep existing video-poster grid.
+  grid.classList.add("video-grid");
   const frag = document.createDocumentFragment();
   for (const b of videos) {
     const e = b.extras || {};
@@ -1603,6 +1853,11 @@ Tabs.register({
       els.askResult.classList.remove("hidden");
       root.appendChild(els.askResult);
     }
+    const tb = document.getElementById("askViewToolbar");
+    if (tb) {
+      tb.innerHTML = viewToggleHtml("ask", ["list", "grid", "table"], "list");
+      wireViewToggle(tb, "ask", () => _rerenderAskSources());
+    }
   },
   onShow() { els.askInput?.focus?.(); refreshExportButton(); },
   // Ask tab renders into the same #askSources <ul class="results"> below the
@@ -1624,6 +1879,7 @@ Tabs.register({
           <button type="button" class="subtab active" data-subtab="status">🩺 Doctor</button>
           <button type="button" class="subtab" data-subtab="info">📊 General</button>
           <button type="button" class="subtab" data-subtab="plugins">🔌 Plugins</button>
+          <button type="button" class="subtab" data-subtab="jobs">🔄 Sync &amp; Ingest</button>
           <button type="button" class="subtab" data-subtab="tasks">✈️ Tasks</button>
           <button type="button" class="subtab" data-subtab="logs">📜 Logs</button>
         </nav>
@@ -1651,6 +1907,50 @@ Tabs.register({
             <button type="button" class="btn manage-refresh" id="pluginsRefresh">↻ Refresh</button>
           </div>
           <div id="managePlugins">
+            <p class="hint-text">Loading…</p>
+          </div>
+        </section>
+
+        <section class="subtab-panel" data-subpanel="jobs">
+          <div class="job-launchers" id="jobLaunchers">
+            <article class="job-launcher" data-kind="sync">
+              <header>
+                <h3>🔄 Sync</h3>
+                <p class="hint-text">Pull from sources, optionally enrich.</p>
+              </header>
+              <fieldset class="job-options" data-kind="sync">
+                <label class="check"><input type="checkbox" data-flag="--enrich"> Summarize via LLM (<code>--enrich</code>)</label>
+                <label class="check"><input type="checkbox" data-flag="--enrich-meta"> Run enrichers (<code>--enrich-meta</code>)</label>
+                <label class="check"><input type="checkbox" data-flag="--check-dead-links"> Check dead links</label>
+                <label class="check"><input type="checkbox" data-flag="--all"> Re-process every item (<code>--all</code>)</label>
+                <label class="check"><input type="checkbox" data-flag="--no-sync"> Skip sync step (<code>--no-sync</code>)</label>
+                <label class="check"><input type="checkbox" data-flag="--dry-run"> Dry run</label>
+                <div class="job-source-row">
+                  <span class="job-source-label">Sources <span class="hint-text">(blank = all)</span></span>
+                  <div class="job-source-chips" id="jobSyncSources"></div>
+                </div>
+                <div class="job-source-row">
+                  <span class="job-source-label">Enrichers <span class="hint-text">(blank = all)</span></span>
+                  <div class="job-source-chips" id="jobSyncEnrichers"></div>
+                </div>
+              </fieldset>
+              <button type="button" class="btn primary job-run-btn" data-kind="sync">▶ Run sync</button>
+            </article>
+            <article class="job-launcher" data-kind="ingest">
+              <header>
+                <h3>📚 Ingest</h3>
+                <p class="hint-text">Re-index bookmarks into the vector DB.</p>
+              </header>
+              <fieldset class="job-options" data-kind="ingest">
+                <label class="check"><input type="checkbox" data-flag="--reset"> Reset collection (<code>--reset</code>)</label>
+              </fieldset>
+              <button type="button" class="btn primary job-run-btn" data-kind="ingest">▶ Run ingest</button>
+            </article>
+          </div>
+          <div class="subtab-actions">
+            <button type="button" class="btn manage-refresh" id="jobsRefresh">↻ Refresh</button>
+          </div>
+          <div id="manageJobs">
             <p class="hint-text">Loading…</p>
           </div>
         </section>
@@ -1691,6 +1991,12 @@ Tabs.register({
             ?.addEventListener("click", loadManagePlugins);
     document.getElementById("tasksRefresh")
             ?.addEventListener("click", refreshManageTasks);
+    document.getElementById("jobsRefresh")
+            ?.addEventListener("click", refreshManageJobs);
+
+    el.querySelectorAll(".job-run-btn").forEach(btn => {
+      btn.addEventListener("click", () => runManageJob(btn.dataset.kind));
+    });
 
     initManageLogs();
 
@@ -1707,7 +2013,7 @@ Tabs.register({
     // refresh lazily when activated (see setManageSubtab).
     runManageSubtabLoader(_manageSubtab);
   },
-  onHide() { stopLogsFollow(); stopTasksPoll(); },
+  onHide() { stopLogsFollow(); stopTasksPoll(); stopJobsPoll(); },
 });
 
 let _manageSubtab = "status";
@@ -1725,6 +2031,7 @@ function setManageSubtab(id) {
   try { localStorage.setItem("booki.manage.subtab", id); } catch {}
   if (id !== "logs") stopLogsFollow();
   if (id === "tasks") startTasksPoll(); else stopTasksPoll();
+  if (id === "jobs") startJobsPoll(); else stopJobsPoll();
   // Lazy-load the first time; refresh-on-show is handled by onShow.
   if (!_manageSubtabLoaded.has(id)) {
     _manageSubtabLoaded.add(id);
@@ -1737,6 +2044,7 @@ function runManageSubtabLoader(id) {
     case "status":  return loadStatus();
     case "info":    return loadManageInfo();
     case "plugins": return loadManagePlugins();
+    case "jobs":    return loadManageJobs();
     case "tasks":   return refreshManageTasks();
     case "logs":    return refreshManageLogs();
   }
@@ -2040,6 +2348,10 @@ els.askInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); runAsk(); }
 });
 
+// Cached results from the most recent /api/ask call so the view-mode
+// toggle can re-render without re-querying the LLM.
+let _askLastResults = [];
+
 async function runAsk() {
   const q = els.askInput.value.trim();
   if (!q) return;
@@ -2071,21 +2383,41 @@ async function runAsk() {
     } else {
       els.askStatus.textContent = `${data.bookmarks.length} results`;
     }
-    els.askSources.replaceChildren(...data.bookmarks.map((bm) => {
-      // Map to a row — find the full bookmark for richer rendering.
+    _askLastResults = data.bookmarks.map((bm) => {
+      // Resolve to the full bookmark so renderers have tags / kind / etc.
       const full = state.all.find(x => (x.url || "").replace(/\/$/,"").toLowerCase() ===
                                         (bm.url || "").replace(/\/$/,"").toLowerCase())
-                   || { ...bm, id: null, has_summary: !!bm.summary, tags: (bm.tags || "").split(", ").filter(Boolean) };
-      const row = renderRow(
-        { bm: full, titleMatches: [], urlMatches: [], vectorScore: bm._score },
-        false
-      );
-      return row;
-    }));
+                   || { ...bm, id: bm.url, has_summary: !!bm.summary,
+                        tags: (bm.tags || "").split(", ").filter(Boolean) };
+      return { bm: full, score: bm._score };
+    });
+    _rerenderAskSources();
   } catch (err) {
     els.askStatus.textContent = "";
     els.askAnswer.textContent = `Error: ${err.message}`;
+    _askLastResults = [];
   }
+}
+
+function _rerenderAskSources() {
+  const host = els.askSources;
+  if (!host) return;
+  host.className = "results";
+  host.innerHTML = "";
+  if (!_askLastResults.length) return;
+  const items = _askLastResults.map(r => r.bm);
+  const mode = _viewModeFor("ask", "list");
+  if (mode === "grid")  { renderItemsGrid(host, items); return; }
+  if (mode === "table") { renderItemsTable(host, items); return; }
+  // list mode — keep the rich renderRow with vector-score chips.
+  const frag = document.createDocumentFragment();
+  for (const { bm, score } of _askLastResults) {
+    frag.appendChild(renderRow(
+      { bm, titleMatches: [], urlMatches: [], vectorScore: score },
+      false
+    ));
+  }
+  host.replaceChildren(frag);
 }
 
 // ─── Lists ─────────────────────────────────────────────────────────
@@ -2440,26 +2772,44 @@ loadSchema().then(loadBookmarks).then(loadStats).then(loadLists).catch(err => {
 
 // ─── Export wizard ──────────────────────────────────────────────────
 //
-// Topbar "⬇ Export" button → right slide-out drawer → 3-step wizard:
+// Topbar "⬇ Export" button → inline panel mounted at the top of the
+// active tab's content → 4-step wizard:
 //   1. Pick exporter (filtered by active tab's kind; ✈️ marks background)
 //   2. Pick theme + fill theme vars (skipped when exporter declines themes)
-//   3. Fill exporter-specific options + run
+//   3. Fill exporter-specific options
+//   4. Preview the output, then ▶ Run / ✈️ Queue
+//
+// The panel is cloned from <template id="exportPanelTpl">, prepended into
+// the currently-active tab's content area, and removed on close.
 //
 // Selection comes from the active tab's getSelection() hook (declared on
 // each Tabs.register call). Tabs that don't declare one fall through to
 // the empty selection and the button stays disabled.
 
-const exportState = {
-  step: 1,                  // 1 | 2 | 3
-  kind: "any",
-  itemIds: [],
-  exporters: [],
-  selectedExporter: null,
-  themes: [],
-  selectedTheme: null,
-  themeVars: {},
-  options: {},
-};
+let exportPanelEl = null;
+let exportState = _emptyExportState();
+let _colorSchemesCache = null;       // module-scoped — survives panel reopens
+
+function _emptyExportState() {
+  return {
+    step: 1,                  // 1 | 2 | 3 | 4
+    kind: "any",
+    itemIds: [],
+    exporters: [],
+    selectedExporter: null,
+    themes: [],
+    selectedTheme: null,
+    themeVars: {},
+    options: {},
+    // Refine-step state
+    treeGrouping: "none",     // none | tag | kind | source | list | path | importance
+    tree: null,               // null = not yet built; [] = empty tree
+    treeDirty: false,         // user dragged/edited → don't auto-rebuild on grouping
+    treeSeq: 0,               // monotonic id seed for new nodes
+    preview: null,            // {kind, content?, mime?, filename?, manifest?}
+    previewBytes: null,       // bytes the run will reuse for immediate exporters
+  };
+}
 
 function idsFromContainer(selector) {
   const root = document.querySelector(selector);
@@ -2505,30 +2855,53 @@ function _observeExportRoots() {
 }
 document.addEventListener("DOMContentLoaded", _observeExportRoots);
 
+function _exportMountTarget() {
+  // Prefer the search tab's main-content area (skip the sidebar).
+  const inSearchMain = document.querySelector(
+    ".tab-panel[data-panel='search'].active .main-content");
+  if (inSearchMain) return inSearchMain;
+  // Photos / Videos tabs wrap content in .scoped-tab, which carries the
+  // max-width + auto margins — the .tab-panel itself spans the viewport.
+  const scoped = document.querySelector(".tab-panel.active .scoped-tab");
+  if (scoped) return scoped;
+  const active = document.querySelector(".tab-panel.active");
+  return active || document.body;
+}
+
 function openExport() {
+  closeExport();
   const sel = getActiveSelection();
   if (!sel.ids.length) return;
-  exportState.step = 1;
+
+  const tpl = document.getElementById("exportPanelTpl");
+  exportPanelEl = tpl.content.firstElementChild.cloneNode(true);
+  exportPanelEl.querySelector("#exportPanelClose")
+    .addEventListener("click", closeExport);
+  exportPanelEl.querySelector("#exportNextBtn")
+    .addEventListener("click", _onExportNext);
+  exportPanelEl.querySelector("#exportBackBtn")
+    .addEventListener("click", _onExportBack);
+  exportPanelEl.querySelector("#exportStepnav")
+    .addEventListener("click", _onExportStepnav);
+
+  const host = _exportMountTarget();
+  host.prepend(exportPanelEl);
+
+  exportState = _emptyExportState();
   exportState.kind = sel.kind || "any";
   exportState.itemIds = sel.ids.slice();
-  exportState.selectedExporter = null;
-  exportState.selectedTheme = null;
-  exportState.themes = [];
-  exportState.themeVars = {};
-  exportState.options = {};
   document.getElementById("exportItemCount").textContent =
     `· ${sel.ids.length} ${sel.ids.length === 1 ? "item" : "items"}`;
-  const drawer = document.getElementById("exportDrawer");
-  drawer.classList.remove("hidden");
-  drawer.setAttribute("aria-hidden", "false");
   document.getElementById("exportStatus").textContent = "";
   loadExporters().then(renderExportStep);
+  exportPanelEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function closeExport() {
-  const drawer = document.getElementById("exportDrawer");
-  drawer.classList.add("hidden");
-  drawer.setAttribute("aria-hidden", "true");
+  if (exportPanelEl) {
+    exportPanelEl.remove();
+    exportPanelEl = null;
+  }
 }
 
 async function loadExporters() {
@@ -2537,23 +2910,33 @@ async function loadExporters() {
 }
 
 function renderExportStep() {
-  document.querySelectorAll("#exportDrawer .export-step").forEach(el => {
+  if (!exportPanelEl) return;
+  exportPanelEl.querySelectorAll(".export-step").forEach(el => {
     el.classList.toggle("active", el.dataset.step === String(exportState.step));
   });
-  document.querySelectorAll("#exportStepnav .step-pill").forEach(el => {
+  exportPanelEl.querySelectorAll("#exportStepnav .step-pill").forEach(el => {
     el.classList.toggle("active", el.dataset.step === String(exportState.step));
   });
   document.getElementById("exportBackBtn").disabled = exportState.step === 1;
-  document.getElementById("exportNextBtn").textContent = exportState.step === 3 ? "▶ Run" : "Next →";
+  const next = document.getElementById("exportNextBtn");
+  if (exportState.step === 4) {
+    const e = exportState.selectedExporter;
+    next.textContent = e?.execution_mode === "background" ? "✈️ Queue" : "▶ Run";
+  } else {
+    next.textContent = "Next →";
+  }
+  next.disabled = false;
 
   if (exportState.step === 1) renderExporterList();
-  else if (exportState.step === 2) renderThemeStep();
-  else if (exportState.step === 3) renderOptionsStep();
+  else if (exportState.step === 2) renderOptionsStep();
+  else if (exportState.step === 3) renderRefineStep();
+  else if (exportState.step === 4) renderPreviewStep();
 }
 
 function renderExporterList() {
   const host = document.getElementById("exporterList");
   host.innerHTML = "";
+  _renderExporterNotes();
   if (!exportState.exporters.length) {
     host.innerHTML = `<p class="hint-text">No exporters available for this view.</p>`;
     return;
@@ -2573,6 +2956,10 @@ function renderExporterList() {
       exportState.selectedTheme = null;
       exportState.themeVars = {};
       exportState.options = {};
+      exportState.tree = null;
+      exportState.treeDirty = false;
+      exportState.preview = null;
+      exportState.previewBytes = null;
       for (const o of e.options_schema || []) {
         if (o.default !== undefined) exportState.options[o.name] = o.default;
       }
@@ -2582,53 +2969,125 @@ function renderExporterList() {
   }
 }
 
-async function renderThemeStep() {
-  const e = exportState.selectedExporter;
-  const list = document.getElementById("themeList");
-  const vars_ = document.getElementById("themeVars");
-  if (!e) return;
-  if (!e.uses_themes) {
-    list.innerHTML = `<p class="hint-text">No theme for this exporter.</p>`;
-    vars_.innerHTML = "";
-    return;
+function _renderExporterNotes() {
+  const host = document.getElementById("exporterNotes");
+  if (!host) return;
+  const notes = exportState.selectedExporter?.runtime_notes || [];
+  host.innerHTML = "";
+  for (const n of notes) {
+    const div = document.createElement("div");
+    const level = (n.level === "warning" || n.level === "info") ? n.level : "info";
+    div.className = `exporter-note ${level}`;
+    // Notes may contain inline <code>; whitelist nothing else.
+    div.innerHTML = _renderNoteText(n.text || "");
+    host.appendChild(div);
   }
+}
+
+function _renderNoteText(text) {
+  // Allow `inline code` and **bold**. Escape first, then re-mark — the
+  // captured groups are already HTML-safe so we don't escape twice.
+  const safe = escapeHtml(text);
+  return safe
+    .replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`)
+    .replace(/\*\*([^*]+)\*\*/g, (_, c) => `<strong>${c}</strong>`);
+}
+
+// Lazy-load themes for the active exporter and seed sensible defaults for
+// the picker (first theme, defaults from theme.toml). Returns the resolved
+// themes so callers can fall through to "no themes" UX.
+async function _ensureThemesLoaded() {
+  const e = exportState.selectedExporter;
+  if (!e || !e.uses_themes) return [];
   if (!exportState.themes.length) {
     const r = await fetch(`/api/export/themes?exporter=${encodeURIComponent(e.slug)}`);
     exportState.themes = r.ok ? await r.json() : [];
   }
-  if (!exportState.themes.length) {
-    list.innerHTML = `<p class="hint-text">No themes installed for this exporter.</p>`;
-    vars_.innerHTML = "";
-    return;
-  }
-  if (!exportState.selectedTheme) {
+  if (exportState.themes.length && !exportState.selectedTheme) {
     exportState.selectedTheme = exportState.themes[0];
     exportState.themeVars = {};
+    exportState.selectedScheme = null;
     for (const v of exportState.selectedTheme.vars || []) {
       exportState.themeVars[v.name] = v.default;
     }
   }
-  list.innerHTML = "";
-  for (const t of exportState.themes) {
+  return exportState.themes;
+}
+
+// Render the theme picker + var inputs into `host`. `onChange` runs every
+// time the user picks a different theme, swaps a color scheme, or edits an
+// individual var — the preview step uses it to debounce-refetch the preview.
+async function _renderThemeControls(host, onChange) {
+  host.innerHTML = "";
+  const e = exportState.selectedExporter;
+  if (!e || !e.uses_themes) return;
+
+  const themes = await _ensureThemesLoaded();
+  if (!themes.length) {
+    host.innerHTML = `<p class="hint-text">No themes installed for this exporter.</p>`;
+    return;
+  }
+
+  const kind = e.applicable_kinds?.[0] || "any";
+  const list = document.createElement("div");
+  list.className = "theme-list";
+  for (const t of themes) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "theme-item";
     if (exportState.selectedTheme.slug === t.slug) btn.classList.add("selected");
+    const thumb = t.has_thumbnail
+      ? `<img class="theme-thumb"
+              src="/api/export/themes/${encodeURIComponent(kind)}/${encodeURIComponent(t.slug)}/thumbnail"
+              alt="" loading="lazy">`
+      : `<div class="theme-thumb theme-thumb--blank"></div>`;
     btn.innerHTML = `
-      <div class="theme-name">${escapeHtml(t.label)}</div>
-      <div class="theme-desc">${escapeHtml(t.description || "")}</div>`;
+      ${thumb}
+      <div class="theme-meta">
+        <div class="theme-name">${escapeHtml(t.label)}</div>
+        <div class="theme-desc">${escapeHtml(t.description || "")}</div>
+      </div>`;
     btn.addEventListener("click", () => {
       exportState.selectedTheme = t;
       exportState.themeVars = {};
+      exportState.selectedScheme = null;
       for (const v of t.vars || []) exportState.themeVars[v.name] = v.default;
-      renderThemeStep();
+      _renderThemeControls(host, onChange);
+      onChange?.();
     });
     list.appendChild(btn);
   }
-  // Theme var inputs
-  vars_.innerHTML = "";
+  host.appendChild(list);
+
   const theme = exportState.selectedTheme;
-  if (!theme.vars || !theme.vars.length) return;
+  if (!theme?.vars?.length) return;
+
+  const vars_ = document.createElement("div");
+  vars_.className = "theme-vars";
+  const colorVarNames = theme.vars.filter(v => v.type === "color").map(v => v.name);
+  if (colorVarNames.length) {
+    await _ensureColorSchemes();
+    // First "scheme" is always the theme's own theme.toml defaults — gives
+    // the user a one-click revert to the theme's intended palette.
+    const themeDefault = {
+      slug: `__theme_default__:${theme.slug}`,
+      name: `${theme.label} default`,
+      description: "Original colors from theme.toml",
+      colors: Object.fromEntries(
+        theme.vars.filter(v => v.type === "color").map(v => [v.name, v.default])
+      ),
+    };
+    const matching = [themeDefault].concat(
+      exportState.colorSchemes.filter(s =>
+        colorVarNames.some(n => s.colors && n in s.colors))
+    );
+    vars_.appendChild(_renderColorSchemePicker(matching, colorVarNames, () => {
+      // Re-render so the color inputs reflect the new values, then notify.
+      _renderThemeControls(host, onChange);
+      onChange?.();
+    }));
+  }
+
   const form = document.createElement("div");
   form.className = "tv-form";
   for (const v of theme.vars) {
@@ -2636,10 +3095,116 @@ async function renderThemeStep() {
       kind: "tv",
       spec: v,
       value: exportState.themeVars[v.name],
-      onChange: (val) => { exportState.themeVars[v.name] = val; },
+      onChange: (val) => {
+        exportState.themeVars[v.name] = val;
+        onChange?.();
+      },
     }));
   }
   vars_.appendChild(form);
+  host.appendChild(vars_);
+}
+
+async function _ensureColorSchemes() {
+  if (_colorSchemesCache !== null) {
+    exportState.colorSchemes = _colorSchemesCache;
+    return;
+  }
+  try {
+    const r = await fetch("/api/export/colorschemes");
+    _colorSchemesCache = r.ok ? await r.json() : [];
+  } catch {
+    _colorSchemesCache = [];
+  }
+  exportState.colorSchemes = _colorSchemesCache;
+}
+
+function _renderColorSchemePicker(schemes, colorVarNames, onPick) {
+  // Default to the first scheme on initial render — but only paint its
+  // colors into the form once, so re-renders (e.g. after a manual color
+  // edit) don't clobber what the user typed.
+  if (!exportState.selectedScheme) {
+    exportState.selectedScheme = schemes[0].slug;
+    _applyScheme(schemes[0], colorVarNames);
+  }
+  const current = schemes.find(s => s.slug === exportState.selectedScheme) || schemes[0];
+
+  const wrap = document.createElement("div");
+  wrap.className = "scheme-picker";
+  wrap.innerHTML = `
+    <label class="scheme-picker-label">Color scheme</label>
+    <button type="button" class="scheme-trigger" aria-haspopup="listbox" aria-expanded="false">
+      ${_swatchesHtml(current)}
+      <span class="scheme-trigger-name">${escapeHtml(current.name)}</span>
+      <span class="scheme-caret" aria-hidden="true">▾</span>
+    </button>
+    <ul class="scheme-options" role="listbox" hidden>
+      ${schemes.map(s => `
+        <li role="option"
+            class="scheme-option ${s.slug === current.slug ? 'is-selected' : ''}"
+            data-slug="${escapeHtml(s.slug)}">
+          ${_swatchesHtml(s)}
+          <span class="scheme-option-name">${escapeHtml(s.name)}</span>
+        </li>`).join("")}
+    </ul>
+    <p class="hint-text">Picks fill the colors below — you can still tweak each one by hand.</p>`;
+
+  const trigger = wrap.querySelector(".scheme-trigger");
+  const list = wrap.querySelector(".scheme-options");
+
+  function close() {
+    list.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    document.removeEventListener("click", onDocClick, true);
+  }
+  function onDocClick(ev) {
+    if (!wrap.contains(ev.target)) close();
+  }
+  trigger.addEventListener("click", () => {
+    const willOpen = list.hidden;
+    list.hidden = !willOpen;
+    trigger.setAttribute("aria-expanded", String(willOpen));
+    if (willOpen) document.addEventListener("click", onDocClick, true);
+    else document.removeEventListener("click", onDocClick, true);
+  });
+  list.addEventListener("click", (ev) => {
+    const li = ev.target.closest(".scheme-option");
+    if (!li) return;
+    const slug = li.dataset.slug;
+    const scheme = schemes.find(s => s.slug === slug);
+    if (!scheme) return;
+    exportState.selectedScheme = slug;
+    _applyScheme(scheme, colorVarNames);
+    close();
+    onPick?.();
+  });
+  return wrap;
+}
+
+function _applyScheme(scheme, colorVarNames) {
+  for (const name of colorVarNames) {
+    const c = scheme.colors?.[name];
+    if (c) exportState.themeVars[name] = c;
+  }
+}
+
+// Canonical order of role colors a scheme may provide. The picker renders
+// swatches in this order regardless of which roles the theme actually
+// consumes — so a scheme's character (e.g. "Tokyo Night uses cyan + green
+// + yellow + red") is visible in the dropdown even when the theme only
+// hooks up bg/text/link/accent.
+const SCHEME_ROLE_ORDER = [
+  "bg", "text", "link", "accent",
+  "secondary", "muted", "success", "warning", "danger",
+];
+
+function _swatchesHtml(scheme) {
+  const cells = SCHEME_ROLE_ORDER
+    .map(role => scheme.colors?.[role])
+    .filter(Boolean)
+    .map(c => `<span class="scheme-swatch" style="background:${escapeHtml(c)}"></span>`)
+    .join("");
+  return `<span class="scheme-swatches" aria-hidden="true">${cells}</span>`;
 }
 
 async function renderOptionsStep() {
@@ -2735,6 +3300,623 @@ function _renderField({ kind, spec, value, onChange }) {
   return wrap;
 }
 
+// ─── Refine step (tree builder + drag-and-drop) ─────────────────────
+
+const REFINE_GROUPINGS = [
+  { id: "none",        label: "None (flat list)" },
+  { id: "tag",         label: "By tag" },
+  { id: "kind",        label: "By kind" },
+  { id: "source",      label: "By source" },
+  { id: "list",        label: "By list" },
+  { id: "path",        label: "By browser folder" },
+  { id: "importance",  label: "By importance" },
+];
+
+function _newNodeId() { return `n-${++exportState.treeSeq}`; }
+
+function _itemNode(itemId) {
+  return { id: _newNodeId(), type: "item", item_id: String(itemId) };
+}
+
+function _folderNode(name, children = []) {
+  return { id: _newNodeId(), type: "folder", name: String(name), expanded: true, children };
+}
+
+function _bmFor(id) {
+  return window.booki?.bookmarks?.byId?.(id) || null;
+}
+
+function _itemTitle(id) {
+  const b = _bmFor(id);
+  return (b && (b.title || b.url)) || `(missing ${id})`;
+}
+
+function _glyphFor(id) {
+  const b = _bmFor(id);
+  const k = b?.kind || "bookmark";
+  return ({ video: "🎬", photo: "🖼", document: "📄", channel: "📺",
+            github: "🐙", file: "📁", podcast: "🎧", article: "📰" })[k] || "🔖";
+}
+
+// Build a tree from the active grouping. Items appearing in multiple
+// folders (tag/list groupings) are duplicated. Items lacking a value go
+// under "(no <field>)".
+function _buildTreeFromGrouping(itemIds, grouping) {
+  const items = itemIds.map(id => _bmFor(id)).filter(Boolean);
+  const missingIds = itemIds.filter(id => !_bmFor(id));
+
+  if (grouping === "none" || !grouping) {
+    return [...itemIds.map(_itemNode)];
+  }
+
+  const buckets = new Map();      // name → ordered list of itemIds
+  const unsorted = [];
+  const noKey = `(no ${grouping})`;
+
+  for (const b of items) {
+    const keys = _bucketKeys(b, grouping);
+    if (!keys.length) {
+      buckets.set(noKey, (buckets.get(noKey) || []).concat(b.id));
+    } else {
+      for (const k of keys) {
+        buckets.set(k, (buckets.get(k) || []).concat(b.id));
+      }
+    }
+  }
+  for (const mid of missingIds) unsorted.push(mid);
+
+  const folderNames = [...buckets.keys()].sort((a, b) => {
+    if (a === noKey) return 1;
+    if (b === noKey) return -1;
+    return a.localeCompare(b);
+  });
+  const folders = folderNames.map(name =>
+    _folderNode(name, buckets.get(name).map(_itemNode))
+  );
+  if (unsorted.length) folders.push(_folderNode("(unknown)", unsorted.map(_itemNode)));
+  return folders;
+}
+
+// For each non-"none" grouping, how many of the selected items would
+// actually contribute a folder bucket. Used to hide irrelevant options
+// (e.g. "By list" when nothing in the selection has a list).
+function _groupingCounts(itemIds) {
+  const counts = { tag: 0, kind: 0, source: 0, list: 0, path: 0, importance: 0 };
+  for (const id of itemIds) {
+    const b = _bmFor(id);
+    if (!b) continue;
+    if ((b.tags || []).length) counts.tag += 1;
+    if ((b.lists || []).length) counts.list += 1;
+    if (b.kind) counts.kind += 1;
+    if (b.source || (b.sources && b.sources[0])) counts.source += 1;
+    if ((b.folder_path || b.browser_path || "").trim()) counts.path += 1;
+    // Importance is always defined (default 0) — only count items with
+    // a meaningful, non-zero rating; otherwise the option is just a noop.
+    if (Number(b.importance || 0) > 0) counts.importance += 1;
+  }
+  return counts;
+}
+
+function _bucketKeys(b, grouping) {
+  switch (grouping) {
+    case "tag":  return (b.tags || []).map(String).filter(Boolean);
+    case "list": return (b.lists || []).map(String).filter(Boolean);
+    case "kind": return [String(b.kind || "")].filter(Boolean);
+    case "source":
+      return [String(b.source || (b.sources && b.sources[0]) || "")].filter(Boolean);
+    case "path": {
+      const p = String(b.folder_path || b.browser_path || "").trim();
+      if (!p) return [];
+      return [p];                  // keep as a single bucket name; user can sub-foldering later
+    }
+    case "importance": {
+      const i = Number(b.importance || 0);
+      if (i >= 9) return ["★★★ 9–10"];
+      if (i >= 7) return ["★★ 7–8"];
+      if (i >= 4) return ["★ 4–6"];
+      if (i >= 1) return ["1–3"];
+      return ["0"];
+    }
+  }
+  return [];
+}
+
+async function renderRefineStep() {
+  const toolbar = document.getElementById("refineToolbar");
+  const hint = document.getElementById("refineHint");
+  const host = document.getElementById("refineTree");
+  const e = exportState.selectedExporter;
+  if (!e || !toolbar || !host) return;
+
+  // Build initial tree if needed (preserve user edits across step changes).
+  if (exportState.tree === null) {
+    exportState.tree = _buildTreeFromGrouping(exportState.itemIds, exportState.treeGrouping);
+  }
+
+  hint.innerHTML = e.supports_hierarchy
+    ? `<p class="hint-text">This exporter supports nested folders — they'll appear in the output.</p>`
+    : `<p class="hint-text">This exporter is flat — folders below are flattened into ordered items in the output.</p>`;
+
+  // Only surface groupings that would actually create folders for the
+  // current selection. "None" is always shown; other strategies are kept
+  // when at least one item contributes a bucket key.
+  const counts = _groupingCounts(exportState.itemIds);
+  const applicable = REFINE_GROUPINGS.filter(g => g.id === "none" || counts[g.id] > 0);
+  // If the saved grouping is no longer applicable, fall back to "none".
+  if (!applicable.some(g => g.id === exportState.treeGrouping)) {
+    exportState.treeGrouping = "none";
+  }
+  const opts = applicable.map(g => {
+    const c = counts[g.id];
+    const label = g.id === "none" ? g.label : `${g.label} (${c})`;
+    return `<option value="${g.id}" ${g.id === exportState.treeGrouping ? "selected" : ""}>${escapeHtml(label)}</option>`;
+  }).join("");
+  const dirtyBadge = exportState.treeDirty
+    ? `<span class="refine-dirty" title="You've manually edited the tree">edited</span>` : "";
+  toolbar.innerHTML = `
+    <label class="refine-grouping">
+      <span>Auto-group:</span>
+      <select id="refineGrouping">${opts}</select>
+    </label>
+    <button type="button" class="btn small" id="refineNewFolder">+ New folder</button>
+    <button type="button" class="btn small" id="refineRebuild" title="Discard manual edits and rebuild from the grouping">↺ Rebuild</button>
+    <span class="refine-meta">${exportState.itemIds.length} item${exportState.itemIds.length === 1 ? "" : "s"} selected${dirtyBadge}</span>`;
+
+  toolbar.querySelector("#refineGrouping").addEventListener("change", (ev) => {
+    const next = ev.target.value;
+    if (exportState.treeDirty
+        && !confirm("Switching grouping will discard your manual edits. Continue?")) {
+      ev.target.value = exportState.treeGrouping;
+      return;
+    }
+    exportState.treeGrouping = next;
+    exportState.tree = _buildTreeFromGrouping(exportState.itemIds, next);
+    exportState.treeDirty = false;
+    renderRefineStep();
+  });
+  toolbar.querySelector("#refineNewFolder").addEventListener("click", () => {
+    const name = prompt("New folder name:", "New folder");
+    if (!name || !name.trim()) return;
+    exportState.tree.unshift(_folderNode(name.trim()));
+    exportState.treeDirty = true;
+    renderRefineStep();
+  });
+  toolbar.querySelector("#refineRebuild").addEventListener("click", () => {
+    if (exportState.treeDirty
+        && !confirm("Discard manual edits and rebuild from the grouping?")) return;
+    exportState.tree = _buildTreeFromGrouping(exportState.itemIds, exportState.treeGrouping);
+    exportState.treeDirty = false;
+    renderRefineStep();
+  });
+
+  host.innerHTML = "";
+  host.appendChild(_renderTreeRoot(exportState.tree));
+}
+
+function _renderTreeRoot(tree) {
+  const ul = document.createElement("ul");
+  ul.className = "tree tree-root";
+  ul.dataset.parentId = "ROOT";
+  _appendTreeChildren(ul, tree);
+  _wireDropZone(ul, null);          // accept drops at the root
+  return ul;
+}
+
+function _appendTreeChildren(ul, nodes) {
+  ul.appendChild(_dropZone(0));
+  nodes.forEach((n, i) => {
+    ul.appendChild(_renderNode(n));
+    ul.appendChild(_dropZone(i + 1));
+  });
+}
+
+function _dropZone(index) {
+  const li = document.createElement("li");
+  li.className = "tree-dropzone";
+  li.dataset.index = String(index);
+  return li;
+}
+
+function _renderNode(node) {
+  if (node.type === "folder") return _renderFolder(node);
+  return _renderItem(node);
+}
+
+function _renderFolder(node) {
+  const li = document.createElement("li");
+  li.className = "tree-folder" + (node.expanded === false ? " collapsed" : "");
+  li.dataset.nodeId = node.id;
+  li.dataset.nodeType = "folder";
+  li.draggable = true;
+
+  const head = document.createElement("div");
+  head.className = "tree-folder-head";
+  head.innerHTML = `
+    <button class="tree-caret" title="Toggle">${node.expanded === false ? "▸" : "▾"}</button>
+    <span class="tree-glyph">📁</span>
+    <span class="tree-name" tabindex="0">${escapeHtml(node.name || "")}</span>
+    <span class="tree-count">${_countItems(node)}</span>
+    <span class="tree-actions">
+      <button class="tree-btn tree-rename" title="Rename">✎</button>
+      <button class="tree-btn tree-remove" title="Remove folder (items inside are also removed)">✕</button>
+    </span>`;
+  li.appendChild(head);
+
+  head.querySelector(".tree-caret").addEventListener("click", () => {
+    node.expanded = node.expanded === false;
+    renderRefineStep();
+  });
+  head.querySelector(".tree-rename").addEventListener("click", () => _renameFolder(node));
+  head.querySelector(".tree-name").addEventListener("dblclick", () => _renameFolder(node));
+  head.querySelector(".tree-remove").addEventListener("click", () => {
+    if (!confirm(`Remove folder "${node.name}" and everything inside?`)) return;
+    _removeNode(node.id);
+    exportState.treeDirty = true;
+    renderRefineStep();
+  });
+
+  const ul = document.createElement("ul");
+  ul.className = "tree";
+  ul.dataset.parentId = node.id;
+  _appendTreeChildren(ul, node.children || []);
+  li.appendChild(ul);
+
+  // Drop targets: header (into / before-after sliver), inner UL (between-children),
+  // and the row itself (drag source).
+  _wireDragSource(li, node);
+  _wireDropZone(ul, node);
+  _wireFolderDrop(li, head, node);
+  return li;
+}
+
+function _renderItem(node) {
+  const li = document.createElement("li");
+  li.className = "tree-item";
+  li.dataset.nodeId = node.id;
+  li.dataset.nodeType = "item";
+  li.draggable = true;
+  const title = _itemTitle(node.item_id);
+  const glyph = _glyphFor(node.item_id);
+  li.innerHTML = `
+    <span class="tree-grip" aria-hidden="true">⋮⋮</span>
+    <span class="tree-glyph">${glyph}</span>
+    <span class="tree-name" title="${escapeHtml(title)}">${escapeHtml(title)}</span>
+    <span class="tree-actions">
+      <button class="tree-btn tree-remove" title="Remove from export">✕</button>
+    </span>`;
+  li.querySelector(".tree-remove").addEventListener("click", () => {
+    _removeNode(node.id);
+    exportState.treeDirty = true;
+    renderRefineStep();
+  });
+  _wireDragSource(li, node);
+  _wireItemDrop(li, node);
+  return li;
+}
+
+function _renameFolder(node) {
+  const name = prompt("Rename folder:", node.name || "");
+  if (name === null) return;
+  node.name = name.trim() || node.name;
+  exportState.treeDirty = true;
+  renderRefineStep();
+}
+
+function _countItems(node) {
+  let n = 0;
+  (function walk(x) {
+    if (!x) return;
+    if (x.type === "item") n += 1;
+    else (x.children || []).forEach(walk);
+  })(node);
+  return n;
+}
+
+// ── tree mutations ─────────────────────────────────────────────────
+
+function _findNode(id, nodes = exportState.tree, parent = null, parentList = exportState.tree) {
+  for (let i = 0; i < (nodes || []).length; i++) {
+    const n = nodes[i];
+    if (n.id === id) return { node: n, parent, parentList: nodes, index: i };
+    if (n.type === "folder") {
+      const hit = _findNode(id, n.children || [], n, n.children || (n.children = []));
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function _removeNode(id) {
+  const hit = _findNode(id);
+  if (!hit) return;
+  hit.parentList.splice(hit.index, 1);
+}
+
+function _isDescendant(folderId, candidateId) {
+  // Disallow dropping a folder into itself or its own subtree.
+  const hit = _findNode(folderId);
+  if (!hit) return false;
+  let found = false;
+  (function walk(x) {
+    if (found || !x) return;
+    if (x.id === candidateId) { found = true; return; }
+    if (x.type === "folder") (x.children || []).forEach(walk);
+  })(hit.node);
+  return found;
+}
+
+function _moveNode(sourceId, targetParentId, targetIndex) {
+  if (sourceId === targetParentId) return false;
+  if (targetParentId && _isDescendant(sourceId, targetParentId)) return false;
+
+  const src = _findNode(sourceId);
+  if (!src) return false;
+  // Determine the destination list.
+  let destList;
+  if (targetParentId === null || targetParentId === "ROOT") {
+    destList = exportState.tree;
+  } else {
+    const dst = _findNode(targetParentId);
+    if (!dst || dst.node.type !== "folder") return false;
+    if (!Array.isArray(dst.node.children)) dst.node.children = [];
+    destList = dst.node.children;
+  }
+  // Splice out, then adjust target index if removal happened in same list above target.
+  let idx = targetIndex;
+  if (src.parentList === destList && src.index < idx) idx -= 1;
+  src.parentList.splice(src.index, 1);
+  destList.splice(Math.min(Math.max(idx, 0), destList.length), 0, src.node);
+  return true;
+}
+
+// ── drag and drop wiring ───────────────────────────────────────────
+//
+// Three drop targets per row to make aiming forgiving:
+//   1. Inter-row drop zones (the thin <li class=tree-dropzone> slots)
+//      inflate while a drag is in progress, so the gap is visibly clickable.
+//   2. Item rows themselves accept drops — the cursor's Y position decides
+//      "before" (top half) vs "after" (bottom half).
+//   3. Folder headers' top/bottom 25% slivers act as "before/after the folder",
+//      the middle 50% drops INTO the folder (existing behavior).
+
+let _refineDragId = null;
+
+function _clearDropHints() {
+  document.querySelectorAll(
+    ".tree-dropzone.over, .tree-folder-head.over, .tree-item.over-before, .tree-item.over-after, .tree-folder.over-before, .tree-folder.over-after"
+  ).forEach(n => n.classList.remove("over", "over-before", "over-after"));
+}
+
+function _wireDragSource(el, node) {
+  el.addEventListener("dragstart", (ev) => {
+    _refineDragId = node.id;
+    ev.dataTransfer.effectAllowed = "move";
+    try { ev.dataTransfer.setData("text/plain", node.id); } catch {}
+    el.classList.add("dragging");
+    document.body.classList.add("refine-dragging");
+    ev.stopPropagation();
+  });
+  el.addEventListener("dragend", () => {
+    _refineDragId = null;
+    el.classList.remove("dragging");
+    document.body.classList.remove("refine-dragging");
+    _clearDropHints();
+  });
+}
+
+function _wireDropZone(ul, parentNode) {
+  ul.addEventListener("dragover", (ev) => {
+    if (!_refineDragId) return;
+    const dz = ev.target.closest(".tree-dropzone");
+    if (!dz || dz.parentElement !== ul) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.dataTransfer.dropEffect = "move";
+    _clearDropHints();
+    dz.classList.add("over");
+  });
+  ul.addEventListener("drop", (ev) => {
+    const dz = ev.target.closest(".tree-dropzone");
+    if (!dz || dz.parentElement !== ul || !_refineDragId) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const idx = Number(dz.dataset.index || 0);
+    const ok = _moveNode(_refineDragId, parentNode ? parentNode.id : null, idx);
+    _clearDropHints();
+    if (ok) {
+      exportState.treeDirty = true;
+      renderRefineStep();
+    }
+  });
+}
+
+// Item rows: top half → insert before this item, bottom half → after.
+function _wireItemDrop(li, node) {
+  li.addEventListener("dragover", (ev) => {
+    if (!_refineDragId || _refineDragId === node.id) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.dataTransfer.dropEffect = "move";
+    const rect = li.getBoundingClientRect();
+    const before = (ev.clientY - rect.top) < rect.height / 2;
+    _clearDropHints();
+    li.classList.add(before ? "over-before" : "over-after");
+  });
+  li.addEventListener("drop", (ev) => {
+    if (!_refineDragId || _refineDragId === node.id) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const rect = li.getBoundingClientRect();
+    const before = (ev.clientY - rect.top) < rect.height / 2;
+    _clearDropHints();
+    const hit = _findNode(node.id);
+    if (!hit) return;
+    const parentId = hit.parent ? hit.parent.id : null;
+    const idx = before ? hit.index : hit.index + 1;
+    if (_moveNode(_refineDragId, parentId, idx)) {
+      exportState.treeDirty = true;
+      renderRefineStep();
+    }
+  });
+}
+
+// Folder rows: top/bottom 25% slivers reorder the folder among siblings;
+// middle 50% drops INTO the folder (children).
+function _wireFolderDrop(li, head, folderNode) {
+  head.addEventListener("dragover", (ev) => {
+    if (!_refineDragId) return;
+    if (_refineDragId === folderNode.id) return;
+    if (_isDescendant(_refineDragId, folderNode.id)) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.dataTransfer.dropEffect = "move";
+    const rect = head.getBoundingClientRect();
+    const y = ev.clientY - rect.top;
+    _clearDropHints();
+    if (y < rect.height * 0.25) {
+      li.classList.add("over-before");
+    } else if (y > rect.height * 0.75) {
+      li.classList.add("over-after");
+    } else {
+      head.classList.add("over");
+    }
+  });
+  head.addEventListener("drop", (ev) => {
+    if (!_refineDragId) return;
+    if (_refineDragId === folderNode.id) return;
+    if (_isDescendant(_refineDragId, folderNode.id)) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const rect = head.getBoundingClientRect();
+    const y = ev.clientY - rect.top;
+    _clearDropHints();
+
+    let ok = false;
+    if (y < rect.height * 0.25 || y > rect.height * 0.75) {
+      // Insert before/after the folder among its siblings.
+      const hit = _findNode(folderNode.id);
+      if (!hit) return;
+      const parentId = hit.parent ? hit.parent.id : null;
+      const idx = (y < rect.height * 0.25) ? hit.index : hit.index + 1;
+      ok = _moveNode(_refineDragId, parentId, idx);
+    } else {
+      // Drop INTO the folder (append at end).
+      const childCount = (folderNode.children || []).length;
+      ok = _moveNode(_refineDragId, folderNode.id, childCount);
+      if (ok) folderNode.expanded = true;
+    }
+    if (ok) {
+      exportState.treeDirty = true;
+      renderRefineStep();
+    }
+  });
+}
+
+
+let _previewFetchTimer = null;
+let _previewFetchSeq = 0;
+
+async function renderPreviewStep() {
+  const themeBar = document.getElementById("previewThemeBar");
+  await _renderThemeControls(themeBar, _schedulePreviewFetch);
+  await _fetchPreviewNow();
+}
+
+// Coalesce rapid changes (color picker, repeated theme switches) into a
+// single preview re-fetch. Drops stale responses via a sequence guard.
+function _schedulePreviewFetch() {
+  if (_previewFetchTimer) clearTimeout(_previewFetchTimer);
+  _previewFetchTimer = setTimeout(_fetchPreviewNow, 250);
+}
+
+async function _fetchPreviewNow() {
+  if (_previewFetchTimer) { clearTimeout(_previewFetchTimer); _previewFetchTimer = null; }
+  const host = document.getElementById("previewBody");
+  if (!host) return;
+  const seq = ++_previewFetchSeq;
+  host.classList.add("preview-loading");
+  if (!host.firstChild) {
+    host.innerHTML = `<p class="hint-text">Building preview…</p>`;
+  }
+  const e = exportState.selectedExporter;
+  const body = {
+    exporter: e.slug,
+    theme: exportState.selectedTheme?.slug || null,
+    theme_vars: exportState.themeVars,
+    options: exportState.options,
+    item_ids: exportState.itemIds,
+    tree: exportState.tree || null,
+  };
+  let preview;
+  try {
+    const r = await fetch("/api/export/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      throw new Error(`HTTP ${r.status}: ${t}`);
+    }
+    preview = await r.json();
+  } catch (err) {
+    if (seq !== _previewFetchSeq) return;          // a newer fetch is in flight
+    host.classList.remove("preview-loading");
+    host.innerHTML = `<p class="hint-text">Preview unavailable: ${escapeHtml(err.message)}.<br>You can still ▶ Run the export.</p>`;
+    exportState.preview = { kind: "none" };
+    return;
+  }
+  if (seq !== _previewFetchSeq) return;            // stale response
+  host.classList.remove("preview-loading");
+  exportState.preview = preview;
+  _renderPreviewBody(host, preview);
+}
+
+function _renderPreviewBody(host, p) {
+  host.innerHTML = "";
+  const meta = document.createElement("p");
+  meta.className = "preview-meta";
+  const filename = p.filename || "(stream)";
+  const mime = p.mime || "";
+  const truncated = p.truncated ? `<span>· truncated to ${p.preview_lines || "preview"} lines</span>` : "";
+  meta.innerHTML = `<span>📦 <code>${escapeHtml(filename)}</code></span>${mime ? `<span>${escapeHtml(mime)}</span>` : ""}${truncated}`;
+  host.appendChild(meta);
+
+  if (p.kind === "html") {
+    const frame = document.createElement("iframe");
+    frame.className = "preview-frame";
+    frame.setAttribute("sandbox", "");
+    frame.setAttribute("srcdoc", p.content || "");
+    host.appendChild(frame);
+  } else if (p.kind === "text") {
+    const pre = document.createElement("pre");
+    pre.className = "preview-pre";
+    const lang = _detectPreviewLang(p.mime || "", p.filename || "");
+    const text = p.content || "";
+    if (lang === "json") pre.innerHTML = _highlightJSON(text);
+    else if (lang === "yaml") pre.innerHTML = _highlightYAML(text);
+    else pre.textContent = text;
+    host.appendChild(pre);
+  } else if (p.kind === "manifest") {
+    const wrap = document.createElement("div");
+    wrap.className = "preview-manifest";
+    const rows = (p.manifest || []).map(row => `
+      <tr>
+        <td>${escapeHtml(row.title || "(untitled)")}<br>
+            <span class="hint-text">${escapeHtml(row.url || "")}</span></td>
+        <td><span class="plan-pill ${row.plan === 'skip' ? 'skip' : ''}">${escapeHtml(row.plan || "")}</span></td>
+        <td><code>${escapeHtml(row.filename || "")}</code></td>
+        <td>${escapeHtml(row.note || "")}</td>
+      </tr>`).join("");
+    wrap.innerHTML = `<table>
+      <thead><tr><th>Item</th><th>Plan</th><th>Filename</th><th>Note</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+    host.appendChild(wrap);
+  } else {
+    host.innerHTML = `<p class="hint-text">No preview available for this exporter.</p>`;
+  }
+}
+
 async function runExport() {
   const e = exportState.selectedExporter;
   const status = document.getElementById("exportStatus");
@@ -2746,6 +3928,7 @@ async function runExport() {
     theme_vars: exportState.themeVars,
     options: exportState.options,
     item_ids: exportState.itemIds,
+    tree: exportState.tree || null,
   };
   status.textContent = "Running…";
   next.disabled = true;
@@ -2790,51 +3973,144 @@ async function runExport() {
   }
 }
 
-document.getElementById("openExportBtn")?.addEventListener("click", openExport);
-document.getElementById("exportDrawerClose")?.addEventListener("click", closeExport);
-document.getElementById("exportNextBtn")?.addEventListener("click", () => {
+function _onExportNext() {
+  const status = document.getElementById("exportStatus");
   if (exportState.step === 1) {
     if (!exportState.selectedExporter) {
-      document.getElementById("exportStatus").textContent = "Pick an exporter first.";
+      status.textContent = "Pick an exporter first.";
       return;
     }
-    document.getElementById("exportStatus").textContent = "";
-    exportState.step = exportState.selectedExporter.uses_themes ? 2 : 3;
+    status.textContent = "";
+    exportState.step = 2;
   } else if (exportState.step === 2) {
-    if (exportState.selectedExporter.uses_themes && !exportState.selectedTheme) {
-      document.getElementById("exportStatus").textContent = "Pick a theme first.";
-      return;
-    }
-    document.getElementById("exportStatus").textContent = "";
+    status.textContent = "";
     exportState.step = 3;
+  } else if (exportState.step === 3) {
+    status.textContent = "";
+    exportState.step = 4;
   } else {
     return runExport();
   }
   renderExportStep();
-});
-document.getElementById("exportBackBtn")?.addEventListener("click", () => {
-  if (exportState.step === 3 && !exportState.selectedExporter?.uses_themes) {
-    exportState.step = 1;
-  } else if (exportState.step > 1) {
-    exportState.step -= 1;
-  }
+}
+
+function _onExportBack() {
+  if (exportState.step > 1) exportState.step -= 1;
   renderExportStep();
-});
-document.getElementById("exportStepnav")?.addEventListener("click", (e) => {
-  const pill = e.target.closest(".step-pill");
+}
+
+function _onExportStepnav(ev) {
+  const pill = ev.target.closest(".step-pill");
   if (!pill) return;
   const target = Number(pill.dataset.step);
   // Only allow stepping back to a completed step.
   if (target > exportState.step) return;
-  if (target === 2 && !exportState.selectedExporter?.uses_themes) return;
   exportState.step = target;
   renderExportStep();
-});
+}
+
+document.getElementById("openExportBtn")?.addEventListener("click", openExport);
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  const drawer = document.getElementById("exportDrawer");
-  if (drawer && !drawer.classList.contains("hidden")) closeExport();
+  if (exportPanelEl) closeExport();
 });
+
+// ─── Preview syntax highlighting (JSON / YAML) ──────────────────────
+
+function _detectPreviewLang(mime, filename) {
+  const m = (mime || "").toLowerCase();
+  if (m.includes("json")) return "json";
+  if (m.includes("yaml")) return "yaml";
+  const f = (filename || "").toLowerCase();
+  if (f.endsWith(".json")) return "json";
+  if (f.endsWith(".yaml") || f.endsWith(".yml")) return "yaml";
+  return "plain";
+}
+
+// Single-pass JSON tokenizer. Matches strings (with optional trailing colon
+// → key), numbers, and the bare literals true/false/null. Everything between
+// matches gets HTML-escaped as-is so braces/brackets/commas render plainly.
+const _JSON_TOKEN_RE = /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
+
+function _highlightJSON(text) {
+  let out = "";
+  let last = 0;
+  for (const m of text.matchAll(_JSON_TOKEN_RE)) {
+    out += escapeHtml(text.slice(last, m.index));
+    const [whole, str, colon, lit, num] = m;
+    if (str !== undefined) {
+      const cls = colon ? "tk-key" : "tk-str";
+      out += `<span class="${cls}">${escapeHtml(str)}</span>`;
+      if (colon) out += escapeHtml(colon);
+    } else if (lit !== undefined) {
+      const cls = lit === "null" ? "tk-null" : "tk-bool";
+      out += `<span class="${cls}">${lit}</span>`;
+    } else if (num !== undefined) {
+      out += `<span class="tk-num">${num}</span>`;
+    }
+    last = m.index + whole.length;
+  }
+  out += escapeHtml(text.slice(last));
+  return out;
+}
+
+// Per-line YAML highlighter. Matches: leading list dash, key:, scalar value,
+// trailing #comment. Flow-style values ([…] / {…}) are passed through the
+// JSON highlighter for free.
+function _highlightYAML(text) {
+  return text.split("\n").map(_highlightYamlLine).join("\n");
+}
+
+function _highlightYamlLine(line) {
+  // Pull off a trailing "#…" comment that isn't inside quotes.
+  let code = line, comment = "";
+  const cm = line.match(/^((?:[^"'#]|"(?:\\.|[^"\\])*"|'(?:''|[^'])*')*?)(\s+#.*)$/);
+  if (cm) { code = cm[1]; comment = cm[2]; }
+
+  const keyMatch = code.match(/^(\s*(?:- )?)([\w.][\w.\-]*)(\s*:)(\s*)(.*)$/);
+  if (keyMatch) {
+    const [, indent, key, colon, gap, val] = keyMatch;
+    const indentHtml = indent.endsWith("- ")
+      ? escapeHtml(indent.slice(0, -2)) + `<span class="tk-punct">- </span>`
+      : escapeHtml(indent);
+    return indentHtml
+         + `<span class="tk-key">${escapeHtml(key)}</span>`
+         + escapeHtml(colon + gap)
+         + _highlightYamlScalar(val)
+         + (comment ? `<span class="tk-comment">${escapeHtml(comment)}</span>` : "");
+  }
+
+  const liMatch = code.match(/^(\s*)(- )(.*)$/);
+  if (liMatch) {
+    return escapeHtml(liMatch[1])
+         + `<span class="tk-punct">- </span>`
+         + _highlightYamlScalar(liMatch[3])
+         + (comment ? `<span class="tk-comment">${escapeHtml(comment)}</span>` : "");
+  }
+
+  return escapeHtml(code) + (comment ? `<span class="tk-comment">${escapeHtml(comment)}</span>` : "");
+}
+
+function _highlightYamlScalar(s) {
+  if (s === "") return "";
+  if (/^"(?:\\.|[^"\\])*"$/.test(s) || /^'(?:''|[^'])*'$/.test(s)) {
+    return `<span class="tk-str">${escapeHtml(s)}</span>`;
+  }
+  if (/^(true|false|yes|no|on|off)$/i.test(s)) {
+    return `<span class="tk-bool">${escapeHtml(s)}</span>`;
+  }
+  if (/^(null|~)$/i.test(s)) {
+    return `<span class="tk-null">${escapeHtml(s)}</span>`;
+  }
+  if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(s)) {
+    return `<span class="tk-num">${escapeHtml(s)}</span>`;
+  }
+  if ((s.startsWith("[") && s.endsWith("]")) ||
+      (s.startsWith("{") && s.endsWith("}"))) {
+    return _highlightJSON(s);
+  }
+  return escapeHtml(s);
+}
 
 
 // ─── Manage › Tasks sub-tab ─────────────────────────────────────────
@@ -2940,4 +4216,221 @@ function _renderTaskRow(t) {
         ${logBlock || `<p class="hint-text">No log yet.</p>`}
       </div>
     </div>`;
+}
+
+
+// ─── Manage › Sync & Ingest sub-tab ─────────────────────────────────
+
+let _jobsPollTimer = null;
+
+function startJobsPoll() {
+  stopJobsPoll();
+  _jobsPollTimer = setInterval(() => {
+    if (_manageSubtab === "jobs") refreshManageJobs();
+  }, 1500);
+}
+function stopJobsPoll() {
+  if (_jobsPollTimer) { clearInterval(_jobsPollTimer); _jobsPollTimer = null; }
+}
+
+async function loadManageJobs() {
+  await _populateJobChips();
+  await refreshManageJobs();
+}
+
+async function _populateJobChips() {
+  const sources = document.getElementById("jobSyncSources");
+  const enrichers = document.getElementById("jobSyncEnrichers");
+  if (!sources || !enrichers) return;
+  if (sources.dataset.loaded === "1") return;
+  try {
+    const r = await fetch("/api/plugins");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    sources.innerHTML = (data.sources || [])
+      .map(s => _chipBtn(s.name, s.available !== false)).join("");
+    enrichers.innerHTML = (data.enrichers || [])
+      .filter(e => !e.disabled)
+      .map(e => _chipBtn(e.name, true)).join("");
+    sources.dataset.loaded = "1";
+    [sources, enrichers].forEach(host => {
+      host.querySelectorAll(".job-chip").forEach(b => {
+        b.addEventListener("click", () => b.classList.toggle("on"));
+      });
+    });
+  } catch (e) {
+    sources.innerHTML = `<span class="hint-text">Failed to load sources: ${escapeHtml(e.message)}</span>`;
+  }
+}
+
+function _chipBtn(name, available) {
+  const cls = available ? "job-chip" : "job-chip disabled";
+  const title = available ? name : `${name} (unavailable)`;
+  return `<button type="button" class="${cls}" data-name="${escapeHtml(name)}" title="${escapeHtml(title)}">${escapeHtml(name)}</button>`;
+}
+
+function _collectChipValues(hostId) {
+  const host = document.getElementById(hostId);
+  if (!host) return [];
+  return [...host.querySelectorAll(".job-chip.on")].map(b => b.dataset.name);
+}
+
+async function runManageJob(kind) {
+  const fieldset = document.querySelector(`.job-options[data-kind="${kind}"]`);
+  if (!fieldset) return;
+  const args = [];
+  fieldset.querySelectorAll('input[type="checkbox"][data-flag]').forEach(cb => {
+    if (cb.checked) args.push(cb.dataset.flag);
+  });
+  if (kind === "sync") {
+    const srcs = _collectChipValues("jobSyncSources");
+    if (srcs.length) args.push("--source", ...srcs);
+    const ens = _collectChipValues("jobSyncEnrichers");
+    if (ens.length) args.push("--enricher", ...ens);
+  }
+  const btn = document.querySelector(`.job-run-btn[data-kind="${kind}"]`);
+  if (btn) { btn.disabled = true; btn.textContent = "Queueing…"; }
+  try {
+    const r = await fetch("/api/jobs/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind, args }),
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      throw new Error(`HTTP ${r.status}: ${text}`);
+    }
+    const data = await r.json();
+    showToast(`Queued ${kind} (#${data.job_id})`);
+    refreshManageJobs();
+  } catch (e) {
+    showToast(`Failed to queue ${kind}: ${e.message}`);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = kind === "sync" ? "▶ Run sync" : "▶ Run ingest";
+    }
+  }
+}
+
+async function refreshManageJobs() {
+  const host = document.getElementById("manageJobs");
+  if (!host) return;
+  let jobs;
+  try {
+    const r = await fetch("/api/jobs");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    jobs = await r.json();
+  } catch (e) {
+    host.innerHTML = `<p class="hint-text">Failed to load jobs: ${escapeHtml(e.message)}</p>`;
+    return;
+  }
+  if (!jobs.length) {
+    host.innerHTML = `<p class="hint-text">No jobs yet. Pick options above and hit Run.</p>`;
+    return;
+  }
+
+  // Preserve which rows the user has expanded across polls.
+  const expanded = new Set(
+    [...host.querySelectorAll(".task-row.expanded")].map(r => r.dataset.id)
+  );
+
+  host.innerHTML = jobs.map(_renderJobRow).join("");
+  host.querySelectorAll(".task-row").forEach(row => {
+    if (expanded.has(row.dataset.id)) {
+      row.classList.add("expanded");
+      const t = row.querySelector(".task-toggle");
+      if (t) t.textContent = "▾";
+    }
+    row.querySelector(".task-toggle")?.addEventListener("click", () => {
+      row.classList.toggle("expanded");
+      const t = row.querySelector(".task-toggle");
+      if (t) t.textContent = row.classList.contains("expanded") ? "▾" : "▸";
+    });
+    row.querySelector(".job-cancel")?.addEventListener("click", async () => {
+      await fetch(`/api/jobs/${row.dataset.id}/cancel`, { method: "POST" });
+      refreshManageJobs();
+    });
+    row.querySelector(".task-delete")?.addEventListener("click", async () => {
+      if (!confirm("Delete this job record?")) return;
+      await fetch(`/api/jobs/${row.dataset.id}`, { method: "DELETE" });
+      refreshManageJobs();
+    });
+  });
+}
+
+function _renderJobRow(j) {
+  const STATUS = {
+    pending: { ico: "⏳", cls: "pending" },
+    running: { ico: "🏃", cls: "running" },
+    success: { ico: "✓",  cls: "success" },
+    failed:  { ico: "✗",  cls: "failed"  },
+  }[j.status] || { ico: "·", cls: "" };
+
+  const progressBar = j.status === "running"
+    ? `<div class="task-progress task-progress-indeterminate"><div class="task-progress-fill"></div></div>`
+    : "";
+
+  const cancelBtn = (j.status === "running" || j.status === "pending")
+    ? `<button class="btn small job-cancel" type="button" title="Stop this job">⏹ Stop</button>`
+    : "";
+
+  const argsLine = (j.args && j.args.length)
+    ? `<span class="task-meta job-args"><code>${escapeHtml(j.args.join(" "))}</code></span>`
+    : `<span class="task-meta hint-text">no flags</span>`;
+
+  const created = (j.created_at || "").replace("T", " ").slice(0, 16);
+  const finished = (j.finished_at || "").replace("T", " ").slice(0, 16);
+  const elapsed = j.started_at && j.finished_at
+    ? _formatDurationMs(Date.parse(j.finished_at) - Date.parse(j.started_at))
+    : (j.started_at && j.status === "running"
+        ? _formatDurationMs(Date.now() - Date.parse(j.started_at)) : "");
+
+  const result = j.status === "success"
+    ? `<span class="job-result ok">✓ exit 0${elapsed ? ` · ${elapsed}` : ""}</span>`
+    : (j.status === "failed"
+        ? `<span class="job-result fail">✗ ${escapeHtml(j.error || "failed")}${elapsed ? ` · ${elapsed}` : ""}</span>`
+        : (j.status === "running"
+            ? `<span class="job-result running">running${elapsed ? ` · ${elapsed}` : ""}</span>` : ""));
+
+  const errorBlock = j.error && j.status === "failed"
+    ? `<div class="task-error">${escapeHtml(j.error)}</div>` : "";
+  const finishedBlock = j.finished_at
+    ? `<div class="hint-text">finished ${escapeHtml(finished)}</div>` : "";
+  const logBlock = j.log
+    ? `<pre class="task-log">${escapeHtml(j.log)}</pre>`
+    : `<p class="hint-text">No output yet.</p>`;
+
+  return `
+    <div class="task-row task-${STATUS.cls}" data-id="${j.id}">
+      <div class="task-summary">
+        <button class="task-toggle" type="button" aria-label="Toggle details">▸</button>
+        <span class="task-status-icon">${STATUS.ico}</span>
+        <span class="task-exporter">${escapeHtml(j.kind)}</span>
+        ${argsLine}
+        <span class="task-meta">${escapeHtml(created)}</span>
+        ${progressBar}
+        ${result}
+        <div class="task-actions">
+          ${cancelBtn}
+          <button class="btn small task-delete" type="button" title="Delete job record">🗑</button>
+        </div>
+      </div>
+      <div class="task-fold">
+        ${errorBlock}
+        ${finishedBlock}
+        ${logBlock}
+      </div>
+    </div>`;
+}
+
+function _formatDurationMs(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  if (m < 60) return `${m}m ${rs}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
 }

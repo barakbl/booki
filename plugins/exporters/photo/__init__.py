@@ -85,15 +85,23 @@ class PhotoGalleryExporter(Exporter):
     options_schema = [
         {"name": "page_title", "type": "text", "label": "Page title",
          "default": "My Photos"},
+        {"name": "footer_text", "type": "text", "label": "Footer text",
+         "default": "",
+         "help": "Optional text rendered at the bottom of the page."},
         {"name": "show_search", "type": "bool", "label": "Show inline search",
-         "default": True},
+         "default": True,
+         "help": "Uncheck to remove the type-to-filter input."},
+        {"name": "rtl", "type": "bool", "label": "Right-to-left (Arabic / Hebrew)",
+         "default": False},
     ]
 
-    def run_immediate(self, items, options, theme, theme_vars):
+    def run_immediate(self, items, options, theme, theme_vars, tree=None):
         if theme is None:
             raise ValueError("Photo gallery exporter requires a theme.")
         page_title = options.get("page_title") or "My Photos"
+        footer_text = (options.get("footer_text") or "").strip()
         show_search = bool(options.get("show_search", True))
+        rtl = bool(options.get("rtl", False))
 
         photos = []
         for it in items:
@@ -115,6 +123,8 @@ class PhotoGalleryExporter(Exporter):
         tmpl = env.get_template("main.html.j2")
         html = tmpl.render(
             title=page_title,
+            footer_text=footer_text,
+            rtl=rtl,
             photos=photos,
             theme_vars=theme_vars,
             show_search=show_search,

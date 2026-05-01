@@ -1,0 +1,27 @@
+name = "Ratatui"
+description = "Terminal TUI gallery — chafa-style framed tiles."
+
+[vars.bg]
+type = "color"
+label = "Background"
+default = "#0c0c14"
+
+[vars.text]
+type = "color"
+label = "Text"
+default = "#cdd6f4"
+
+[vars.accent]
+type = "color"
+label = "Accent"
+default = "#fbbf24"
+
+[vars.secondary]
+type = "color"
+label = "Secondary"
+default = "#7dcfff"
+
+[vars.muted]
+type = "color"
+label = "Muted"
+default = "#565f89"

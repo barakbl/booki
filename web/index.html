@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b0d12">
 <title>Booki — Bookmarks</title>
-<link rel="stylesheet" href="/static/styles.css?v=30">
+<link rel="stylesheet" href="/static/styles.css?v=47">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E📚%3C/text%3E%3C/svg%3E">
 </head>
 <body>
@@ -146,11 +146,13 @@
   </aside>
 
   <div class="main-content">
+    <div class="results-toolbar" id="searchViewToolbar"></div>
     <ul id="results" class="results"></ul>
 
     <section id="askResult" class="ask-result hidden">
       <div id="askStatus" class="ask-status"></div>
       <article id="askAnswer" class="ask-answer"></article>
+      <div class="results-toolbar" id="askViewToolbar"></div>
       <h3 class="ask-sources-heading">Sources</h3>
       <ul id="askSources" class="results"></ul>
     </section>
@@ -271,27 +273,34 @@
   </div>
 </div>
 
-<aside id="exportDrawer" class="export-drawer hidden" aria-hidden="true">
-  <div class="export-drawer-inner">
+<template id="exportPanelTpl">
+  <section class="export-panel" data-export-panel>
     <header class="export-head">
       <h2>Export <span id="exportItemCount" class="export-count"></span></h2>
-      <button class="drawer-close" id="exportDrawerClose" aria-label="Close">✕</button>
+      <button class="drawer-close" id="exportPanelClose" aria-label="Close">✕</button>
     </header>
     <nav class="export-stepnav" id="exportStepnav" aria-label="Export wizard steps">
       <button type="button" class="step-pill active" data-step="1">1. Exporter</button>
-      <button type="button" class="step-pill" data-step="2">2. Theme</button>
-      <button type="button" class="step-pill" data-step="3">3. Options</button>
+      <button type="button" class="step-pill" data-step="2">2. Options</button>
+      <button type="button" class="step-pill" data-step="3">3. Organize</button>
+      <button type="button" class="step-pill" data-step="4">4. Preview</button>
     </nav>
     <div class="export-stepbody">
       <section class="export-step active" data-step="1">
+        <div id="exporterNotes" class="exporter-notes"></div>
         <ul id="exporterList" class="exporter-list"></ul>
       </section>
       <section class="export-step" data-step="2">
-        <div id="themeList" class="theme-list"></div>
-        <div id="themeVars" class="theme-vars"></div>
+        <div id="optionsForm" class="options-form"></div>
       </section>
       <section class="export-step" data-step="3">
-        <div id="optionsForm" class="options-form"></div>
+        <div id="refineToolbar" class="refine-toolbar"></div>
+        <div id="refineHint" class="refine-hint"></div>
+        <div id="refineTree" class="refine-tree"></div>
+      </section>
+      <section class="export-step" data-step="4">
+        <div class="preview-theme-bar" id="previewThemeBar"></div>
+        <div id="previewBody" class="preview-body"></div>
       </section>
     </div>
     <footer class="export-actions">
@@ -301,11 +310,11 @@
         <button type="button" class="btn primary" id="exportNextBtn">Next →</button>
       </div>
     </footer>
-  </div>
-</aside>
+  </section>
+</template>
 
 <div id="toast" class="toast hidden"></div>
 
-<script src="/static/app.js?v=30"></script>
+<script src="/static/app.js?v=46"></script>
 </body>
 </html>

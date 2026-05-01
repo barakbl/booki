@@ -1,0 +1,168 @@
+# Named color palettes the export wizard offers as a one-click filler for
+# the theme-vars step. Each scheme provides values per variable name; the
+# wizard applies them to whichever color vars the active theme declares
+# (vars without a matching key are left untouched).
+#
+# Standard role names a scheme may provide. Themes opt into whichever of
+# these they actually use:
+#   bg         page background
+#   text       primary foreground
+#   link       interactive / hyperlink color
+#   accent     primary accent / brand
+#   secondary  secondary accent (different hue from `accent`)
+#   muted      de-emphasized text (comments, metadata, hints)
+#   success    positive / OK state
+#   warning    caution / partial state
+#   danger     error / destructive state
+#
+# A scheme is offered for any theme that declares at least one matching
+# color var. Picker swatches always render the full palette so the user
+# can compare flavors at a glance even if their theme only consumes a
+# subset.
+
+# ─── Catppuccin (https://github.com/catppuccin/catppuccin) ──────────
+# Mapping: bg=base, text=text, link=blue, accent=mauve, secondary=peach,
+#          muted=overlay1, success=green, warning=yellow, danger=red.
+
+[[schemes]]
+slug = "catppuccin-latte"
+name = "Catppuccin Latte"
+description = "Light, warm — Catppuccin's daytime flavor."
+[schemes.colors]
+bg = "#eff1f5"
+text = "#4c4f69"
+link = "#1e66f5"
+accent = "#8839ef"
+secondary = "#fe640b"
+muted = "#8c8fa1"
+success = "#40a02b"
+warning = "#df8e1d"
+danger = "#d20f39"
+
+[[schemes]]
+slug = "catppuccin-frappe"
+name = "Catppuccin Frappé"
+description = "Soft dark with cool blue undertones."
+[schemes.colors]
+bg = "#303446"
+text = "#c6d0f5"
+link = "#8caaee"
+accent = "#ca9ee6"
+secondary = "#ef9f76"
+muted = "#838ba7"
+success = "#a6d189"
+warning = "#e5c890"
+danger = "#e78284"
+
+[[schemes]]
+slug = "catppuccin-macchiato"
+name = "Catppuccin Macchiato"
+description = "Mid-dark, balanced contrast."
+[schemes.colors]
+bg = "#24273a"
+text = "#cad3f5"
+link = "#8aadf4"
+accent = "#c6a0f6"
+secondary = "#f5a97f"
+muted = "#8087a2"
+success = "#a6da95"
+warning = "#eed49f"
+danger = "#ed8796"
+
+[[schemes]]
+slug = "catppuccin-mocha"
+name = "Catppuccin Mocha"
+description = "The deepest Catppuccin flavor."
+[schemes.colors]
+bg = "#1e1e2e"
+text = "#cdd6f4"
+link = "#89b4fa"
+accent = "#cba6f7"
+secondary = "#fab387"
+muted = "#7f849c"
+success = "#a6e3a1"
+warning = "#f9e2af"
+danger = "#f38ba8"
+
+# ─── Tokyo Night (https://github.com/folke/tokyonight.nvim) ─────────
+# Mapping: bg=editor bg, text=fg, link=blue, accent=magenta,
+#          secondary=cyan, muted=comment, success=green, warning=yellow,
+#          danger=red. Night and Storm share everything except `bg` upstream;
+#          their secondaries are also identical by design.
+
+[[schemes]]
+slug = "tokyo-night"
+name = "Tokyo Night"
+description = "Neon city after midnight — the original."
+[schemes.colors]
+bg = "#1a1b26"
+text = "#c0caf5"
+link = "#7aa2f7"
+accent = "#bb9af7"
+secondary = "#7dcfff"
+muted = "#565f89"
+success = "#9ece6a"
+warning = "#e0af68"
+danger = "#f7768e"
+
+[[schemes]]
+slug = "tokyo-night-storm"
+name = "Tokyo Night Storm"
+description = "Softer dark — easier on the eyes during long sessions."
+[schemes.colors]
+bg = "#24283b"
+text = "#c0caf5"
+link = "#7aa2f7"
+accent = "#bb9af7"
+secondary = "#7dcfff"
+muted = "#565f89"
+success = "#9ece6a"
+warning = "#ff9e64"
+danger = "#f7768e"
+
+[[schemes]]
+slug = "tokyo-night-moon"
+name = "Tokyo Night Moon"
+description = "Cooler mid-dark with brighter cyans."
+[schemes.colors]
+bg = "#222436"
+text = "#c8d3f5"
+link = "#82aaff"
+accent = "#c099ff"
+secondary = "#86e1fc"
+muted = "#636da6"
+success = "#c3e88d"
+warning = "#ffc777"
+danger = "#ff757f"
+
+[[schemes]]
+slug = "tokyo-night-day"
+name = "Tokyo Night Day"
+description = "The light counterpart — Tokyo at sunrise."
+[schemes.colors]
+bg = "#e1e2e7"
+text = "#3760bf"
+link = "#2e7de9"
+accent = "#9854f1"
+secondary = "#007197"
+muted = "#848cb5"
+success = "#587539"
+warning = "#8c6c3e"
+danger = "#f52a65"
+
+# ─── Misc / community ───────────────────────────────────────────────
+
+[[schemes]]
+slug = "tokyo-neon"
+name = "Tokyo Neon"
+description = "Color-hex remix #91636 — neon cyan + hot pink on deep navy."
+[schemes.colors]
+bg = "#0a0047"
+text = "#00ffd2"
+link = "#ff4499"
+accent = "#ff4499"
+secondary = "#00ffd2"
+muted = "#004687"
+success = "#00ffd2"
+warning = "#ff4499"
+danger = "#ff4499"

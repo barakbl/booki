@@ -48,7 +48,8 @@ booki/
 │   ├── ingest.py       #   markdown → vector DB
 │   ├── chat.py         #   natural language search + LLM answer
 │   ├── web.py          #   FastAPI UI (browse / search / edit / export wizard)
-│   ├── exporter.py     #   selection model + resolver for the export system
+│   ├── exporter.py     #   exporter framework: themes, color schemes, Refine-tree handling, background task store
+│   ├── jobs.py         #   admin job runner — `booki sync`/`ingest` as subprocess, allowlisted flags
 │   ├── download.py     #   yt-dlp wrapper (used by web UI + offline_archive)
 │   ├── browse.py       #   fzf TUI browser
 │   ├── smart_lists.py  #   dynamic lists (filters/queries) used by the web UI
@@ -73,11 +74,11 @@ booki/
 │   │   └── document/         #   kind=document for PDFs / docx / md / epub / …
 │   │       └── web/static/   #   tab.js + tab.css — contributes the Documents tab
 │   └── exporters/      # 📤 exporter plugins
-│       ├── link_page/        #   themed HTML page (cappuccino + Catppuccin Mocha)
-│       ├── offline_archive/  #   ZIP with monolith pages + yt-dlp videos
-│       ├── data_dump/        #   JSON / CSV
-│       ├── llm_prompt/       #   Markdown prompt bundle
-│       └── bookmark_file/    #   Netscape bookmarks.html (browser-importable)
+│       ├── link/             #   themed HTML page (any kind — basic + ratatui themes)
+│       ├── photo/            #   themed photo gallery (kind=photo)
+│       ├── data/             #   CSV / JSON / YAML / Markdown — supports nested output via the Refine tree
+│       ├── bookmark_file/    #   Netscape bookmarks.html — re-importable into any browser; supports nested folders
+│       └── offline_archive/  #   background ZIP with Playwright pages + yt-dlp videos + raw PDFs / images
 │
 ├── web/                # static front-end assets served by web.py — no build step
 │   ├── index.html
@@ -287,10 +288,10 @@ booki web                               # or use the web UI
 
 External binaries (only when you use the matching feature):
 
-| Tool       | Install                  | Used by |
-|------------|--------------------------|---------|
-| `monolith` | `brew install monolith`  | `offline_archive` exporter |
-| `ffmpeg`   | `brew install ffmpeg`    | `yt-dlp` muxing / audio extraction |
+| Tool       | Install                                                       | Used by |
+|------------|---------------------------------------------------------------|---------|
+| Chromium   | `pip install playwright && playwright install chromium`       | `offline_archive` exporter — full-fidelity HTML capture (optional; falls back to plain HTTP) |
+| `ffmpeg`   | `brew install ffmpeg`                                          | `yt-dlp` muxing / audio extraction |
 
 ## Logging
 

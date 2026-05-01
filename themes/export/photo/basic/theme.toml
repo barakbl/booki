@@ -1,0 +1,27 @@
+name = "Basic"
+description = "Clean dark gallery — photos pop against the deep background."
+
+[vars.bg]
+type = "color"
+label = "Background"
+default = "#0b0d12"
+
+[vars.text]
+type = "color"
+label = "Text"
+default = "#e7e9ee"
+
+[vars.accent]
+type = "color"
+label = "Accent"
+default = "#8b5cf6"
+
+[vars.secondary]
+type = "color"
+label = "Secondary"
+default = "#06b6d4"
+
+[vars.muted]
+type = "color"
+label = "Muted text"
+default = "#9aa3b2"

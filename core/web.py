@@ -814,6 +814,14 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
     from .exporter import attach_routes as _attach_exporter_routes
     _attach_exporter_routes(app, cfg, config_path, svc)
 
+    # ── admin jobs (sync, ingest) ────────────────────────────────────────────
+    from .jobs import attach_routes as _attach_job_routes
+    _exports_cfg = (cfg.get("exports", {}) or {})
+    _exports_root = Path(_exports_cfg.get("dir") or (Path(__file__).resolve().parent.parent / "exports"))
+    if not _exports_root.is_absolute():
+        _exports_root = (config_path.parent / _exports_root).resolve()
+    _attach_job_routes(app, _exports_root, Path(__file__).resolve().parent.parent)
+
     # ── static UI ────────────────────────────────────────────────────────────
 
     if dl_cfg.dir.exists():

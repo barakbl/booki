@@ -1,0 +1,37 @@
+name = "Fun"
+description = "Bouncy, colorful, kid-friendly — comic-sans party in a webpage."
+
+[vars.bg]
+type = "color"
+label = "Background"
+default = "#fef3c7"
+
+[vars.text]
+type = "color"
+label = "Text"
+default = "#1f2937"
+
+[vars.link]
+type = "color"
+label = "Link"
+default = "#db2777"
+
+[vars.accent]
+type = "color"
+label = "Accent"
+default = "#7c3aed"
+
+[vars.secondary]
+type = "color"
+label = "Secondary"
+default = "#06b6d4"
+
+[vars.muted]
+type = "color"
+label = "Muted text"
+default = "#6b7280"
+
+[vars.danger]
+type = "color"
+label = "Danger"
+default = "#ef4444"

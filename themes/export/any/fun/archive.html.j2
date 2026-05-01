@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en"{% if rtl %} dir="rtl"{% endif %}>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<style>
+:root {
+  --bg: {{ theme_vars.bg }};
+  --text: {{ theme_vars.text }};
+  --link: {{ theme_vars.link }};
+  --accent: {{ theme_vars.accent }};
+  --secondary: {{ theme_vars.secondary or '#06b6d4' }};
+  --muted: {{ theme_vars.muted or '#6b7280' }};
+  --danger: {{ theme_vars.danger or '#ef4444' }};
+}
+* { box-sizing: border-box; }
+@keyframes wiggle { 0%,100% { transform: rotate(-1.5deg); } 50% { transform: rotate(1.5deg); } }
+@keyframes rainbow-shift { 0% { background-position: 0% 50%; } 100% { background-position: 100% 50%; } }
+html, body {
+  margin: 0; padding: 0;
+  background:
+    radial-gradient(circle at 10% 12%, color-mix(in srgb, var(--accent) 18%, transparent) 0, transparent 240px),
+    radial-gradient(circle at 88% 18%, color-mix(in srgb, var(--secondary) 22%, transparent) 0, transparent 280px),
+    var(--bg);
+  background-attachment: fixed;
+  color: var(--text);
+  font: 16px/1.55 "Comic Sans MS", "Comic Neue", "Marker Felt", "Chalkboard SE", "Bradley Hand", cursive;
+  min-height: 100vh;
+}
+.wrap { max-width: 980px; margin: 0 auto; padding: 24px 22px 60px; }
+.fun-title {
+  font-size: 40px; font-weight: 800; margin: 8px 0 4px; text-align: center;
+  background: linear-gradient(90deg, #ec4899, #f59e0b, #10b981, #06b6d4, #8b5cf6);
+  background-size: 200% 200%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: rainbow-shift 7s linear infinite alternate;
+}
+.fun-meta { text-align: center; color: var(--muted); margin: 0 0 18px; font-size: 14px; }
+input.filter {
+  display: block; width: 100%; max-width: 520px; margin: 0 auto 22px;
+  padding: 12px 18px;
+  font: inherit; font-size: 16px;
+  background: #fff;
+  color: var(--text);
+  border: 3px solid var(--accent); border-radius: 999px;
+  box-shadow: 0 4px 0 0 color-mix(in srgb, var(--accent) 35%, transparent);
+  outline: none;
+}
+input.filter:focus { border-color: var(--secondary); }
+.items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.item {
+  display: grid; grid-template-columns: 88px 1fr; gap: 14px;
+  background: #fff;
+  border: 3px solid color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: 18px; padding: 14px;
+  box-shadow: 4px 4px 0 0 color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.item:nth-child(odd) { transform: rotate(-0.4deg); }
+.item:nth-child(even) { transform: rotate(0.4deg); }
+.thumb {
+  width: 88px; height: 56px; border-radius: 10px; overflow: hidden;
+  background: color-mix(in srgb, var(--secondary) 12%, transparent);
+  display: flex; align-items: center; justify-content: center; font-size: 28px;
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.title { font-weight: 800; color: var(--link); text-decoration: none; }
+.title:hover { text-decoration: underline; text-decoration-style: wavy; }
+.kind {
+  background: color-mix(in srgb, var(--secondary) 22%, transparent);
+  color: var(--secondary);
+  border-radius: 999px; padding: 2px 10px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+}
+.url { font-size: 12px; color: var(--muted); word-break: break-all; }
+.summary { margin-top: 4px; font-size: 14px; }
+.extras { margin-top: 6px; font-size: 12px; }
+.extras a { color: var(--accent); margin-right: 10px; }
+
+.skipped {
+  margin-top: 30px; padding: 14px 18px;
+  background: color-mix(in srgb, var(--danger) 12%, #fff);
+  border: 3px dashed var(--danger); border-radius: 16px;
+  font-size: 14px;
+}
+.skipped h2 { margin: 0 0 8px; color: var(--danger); font-size: 16px; }
+.skipped::before { content: "🙈 "; }
+
+.page-footer {
+  margin-top: 30px; text-align: center; padding: 14px 18px;
+  background: #fff; color: var(--muted);
+  border: 3px dashed var(--secondary); border-radius: 18px;
+  transform: rotate(-0.5deg);
+  font-size: 14px;
+}
+
+[dir="rtl"] body { text-align: right; }
+[dir="rtl"] .item { grid-template-columns: 1fr 88px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fun-title { animation: none; }
+  .item:nth-child(odd), .item:nth-child(even) { transform: none; }
+}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1 class="fun-title">🌟 {{ title }} 🌟</h1>
+  <p class="fun-meta">🎈 {{ items|length }} item{% if items|length != 1 %}s{% endif %} · generated {{ generated_at }}</p>
+  {% if show_search %}<input class="filter" type="search" id="filter" placeholder="🔍 type to find…">{% endif %}
+  <ul class="items" id="results">
+    {%- for it in items %}
+    <li class="item" data-search="{{ ((it.title or '') ~ ' ' ~ (it.url or '') ~ ' ' ~ (it.kind or ''))|lower }}">
+      <a class="thumb" href="./{{ it.filename }}" target="_blank" rel="noopener">
+        {%- if it.thumb %}<img src="./{{ it.thumb }}" alt="">
+        {%- else %}{{ {'video':'🎬','photo':'🖼','document':'📄'}.get(it.plan, '🎁') }}
+        {%- endif %}
+      </a>
+      <div>
+        <div class="head">
+          <a class="title" href="./{{ it.filename }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
+          <span class="kind">{{ it.plan }}</span>
+        </div>
+        <div class="url">{{ it.url }}</div>
+        {% if it.summary %}<div class="summary">{{ it.summary }}</div>{% endif %}
+        {% if it.extra_files %}
+        <div class="extras">
+          {%- for f in it.extra_files %}<a href="./{{ f }}" target="_blank" rel="noopener">📎 {{ f }}</a>{% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </li>
+    {%- endfor %}
+  </ul>
+  {% if skipped %}
+  <section class="skipped">
+    <h2>{{ skipped|length }} skipped</h2>
+    <ul>
+      {%- for s in skipped %}<li><strong>{{ s.title }}</strong> — {{ s.reason }}</li>{%- endfor %}
+    </ul>
+  </section>
+  {% endif %}
+  {% if footer_text %}<footer class="page-footer">🌈 {{ footer_text }} 🌈</footer>{% endif %}
+</main>
+{% if show_search %}
+<script>
+const f = document.getElementById('filter');
+f.focus();
+f.addEventListener('input', () => {
+  const q = f.value.trim().toLowerCase();
+  document.querySelectorAll('#results .item').forEach(li => {
+    li.style.display = (!q || li.dataset.search.includes(q)) ? '' : 'none';
+  });
+});
+</script>
+{% endif %}
+</body>
+</html>

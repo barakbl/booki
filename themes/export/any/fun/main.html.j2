@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en"{% if rtl %} dir="rtl"{% endif %}>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<style>
+:root {
+  --bg: {{ theme_vars.bg }};
+  --text: {{ theme_vars.text }};
+  --link: {{ theme_vars.link }};
+  --accent: {{ theme_vars.accent }};
+  --secondary: {{ theme_vars.secondary or '#06b6d4' }};
+  --muted: {{ theme_vars.muted or '#6b7280' }};
+}
+* { box-sizing: border-box; }
+@keyframes wiggle {
+  0%, 100% { transform: rotate(-1.5deg); }
+  50% { transform: rotate(1.5deg); }
+}
+@keyframes bounce-in {
+  0% { transform: scale(0.8); opacity: 0; }
+  60% { transform: scale(1.05); opacity: 1; }
+  100% { transform: scale(1); }
+}
+@keyframes rainbow-shift {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 100% 50%; }
+}
+html, body {
+  margin: 0; padding: 0;
+  background:
+    radial-gradient(circle at 10% 12%, color-mix(in srgb, var(--accent) 18%, transparent) 0, transparent 240px),
+    radial-gradient(circle at 88% 18%, color-mix(in srgb, var(--secondary) 22%, transparent) 0, transparent 280px),
+    radial-gradient(circle at 30% 90%, color-mix(in srgb, var(--link) 18%, transparent) 0, transparent 320px),
+    var(--bg);
+  background-attachment: fixed;
+  color: var(--text);
+  font: 16px/1.55 "Comic Sans MS", "Comic Neue", "Marker Felt", "Chalkboard SE", "Bradley Hand", cursive;
+  min-height: 100vh;
+}
+
+.wrap { max-width: 980px; margin: 0 auto; padding: 24px 22px 80px; }
+
+.fun-title {
+  font-size: 44px;
+  font-weight: 800;
+  margin: 8px 0 4px;
+  text-align: center;
+  background: linear-gradient(90deg,
+    #ec4899 0%, #f59e0b 25%, #10b981 50%, #06b6d4 75%, #8b5cf6 100%);
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: rainbow-shift 7s linear infinite alternate;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.06);
+  display: inline-block;
+  width: 100%;
+}
+.fun-title .star { display: inline-block; animation: wiggle 2s ease-in-out infinite; }
+
+.fun-meta {
+  text-align: center;
+  color: var(--muted);
+  margin: 0 0 18px;
+  font-size: 14px;
+}
+.fun-meta .sticker { display: inline-block; margin: 0 4px; animation: wiggle 2.4s ease-in-out infinite; }
+
+input.filter {
+  display: block; width: 100%; max-width: 520px; margin: 0 auto 24px;
+  padding: 12px 18px;
+  font: inherit; font-size: 16px;
+  background: #fff;
+  color: var(--text);
+  border: 3px solid var(--accent);
+  border-radius: 999px;
+  outline: none;
+  box-shadow: 0 4px 0 0 color-mix(in srgb, var(--accent) 35%, transparent);
+  transition: transform 120ms, box-shadow 120ms, border-color 120ms;
+}
+input.filter:focus {
+  border-color: var(--secondary);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 0 0 color-mix(in srgb, var(--secondary) 35%, transparent);
+}
+
+.group-name {
+  font-size: 22px; font-weight: 700;
+  color: var(--accent);
+  margin: 28px 0 10px;
+  padding: 4px 14px;
+  display: inline-block;
+  background: #fff;
+  border: 3px dashed var(--secondary);
+  border-radius: 14px;
+  transform: rotate(-1deg);
+}
+.group-name::before { content: "✨ "; }
+.group-name::after  { content: " ✨"; }
+
+.links { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+
+.item {
+  background: #fff;
+  border: 3px solid color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: 18px;
+  padding: 14px 16px;
+  box-shadow: 4px 4px 0 0 color-mix(in srgb, var(--accent) 30%, transparent);
+  transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms;
+  animation: bounce-in 360ms ease-out backwards;
+}
+.item:nth-child(odd)  { transform: rotate(-0.4deg); }
+.item:nth-child(even) { transform: rotate(0.4deg); }
+.item:hover {
+  transform: translateY(-3px) rotate(0deg) scale(1.01);
+  border-color: var(--accent);
+  box-shadow: 6px 6px 0 0 color-mix(in srgb, var(--secondary) 50%, transparent);
+}
+
+.item-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.item-glyph { font-size: 22px; }
+.item-title {
+  font-weight: 800; font-size: 18px;
+  color: var(--link);
+  text-decoration: none;
+}
+.item-title:hover { text-decoration: underline; text-decoration-style: wavy; }
+.item-imp {
+  background: var(--accent); color: #fff;
+  padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
+}
+.item-source {
+  background: color-mix(in srgb, var(--secondary) 18%, transparent);
+  color: var(--secondary);
+  padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 700;
+  text-transform: uppercase;
+}
+.item-url {
+  color: var(--muted); font-size: 12px; word-break: break-all; margin-top: 4px;
+}
+.item-summary { margin-top: 6px; font-size: 14px; }
+.tags { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+.tag {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 12px; font-weight: 700;
+  padding: 3px 12px; border-radius: 999px;
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.empty {
+  text-align: center; color: var(--muted);
+  margin-top: 24px; font-size: 16px;
+}
+.empty::before { content: "🦒 "; }
+.empty::after { content: " 🦒"; }
+
+.page-footer {
+  margin-top: 38px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--muted);
+  padding: 14px 18px;
+  background: #fff;
+  border: 3px dashed var(--secondary);
+  border-radius: 18px;
+  transform: rotate(-0.5deg);
+}
+.page-footer::before { content: "🌈 "; }
+.page-footer::after  { content: " 🌈"; }
+
+[dir="rtl"] body { text-align: right; }
+[dir="rtl"] .item-head, [dir="rtl"] .tags { flex-direction: row-reverse; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fun-title, .fun-meta .sticker, .group-name, .item { animation: none !important; }
+  .item:nth-child(odd), .item:nth-child(even) { transform: none; }
+}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1 class="fun-title"><span class="star">🌟</span> {{ title }} <span class="star">🌟</span></h1>
+  <p class="fun-meta">
+    <span class="sticker">🎈</span> {{ item_count }} item{% if item_count != 1 %}s{% endif %}
+    <span class="sticker">🦄</span> generated {{ generated_at }}
+  </p>
+  {% if show_search %}<input class="filter" type="search" id="filter" placeholder="🔍 type to find…">{% endif %}
+  <div id="results">
+{%- for g in groups %}
+    <section class="group" data-group="{{ g.name }}">
+{%- if g.name %}
+      <h2 class="group-name">{{ g.name }}</h2>
+{%- endif %}
+      <ul class="links">
+{%- for it in g['items'] %}
+        <li class="item" data-search="{{ ((it.title or '') ~ ' ' ~ (it.url or '') ~ ' ' ~ ((it.tags or [])|join(' ')) ~ ' ' ~ (it.summary or ''))|lower }}">
+          <div class="item-head">
+            <span class="item-glyph">{{ it.kind|glyph }}</span>
+            <a class="item-title" href="{{ it.url }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
+            {% if it.importance %}<span class="item-imp">★ {{ it.importance }}</span>{% endif %}
+            {% if it.source %}<span class="item-source">{{ it.source }}</span>{% endif %}
+          </div>
+          <div class="item-url">{{ it.url }}</div>
+          {% if it.summary %}<div class="item-summary">{{ it.summary }}</div>{% endif %}
+          {% if it.tags %}<div class="tags">{% for t in it.tags %}<span class="tag">#{{ t }}</span>{% endfor %}</div>{% endif %}
+        </li>
+{%- endfor %}
+      </ul>
+    </section>
+{%- endfor %}
+  </div>
+  <p class="empty" id="empty" hidden>nothing here yet — try another word</p>
+  {% if footer_text %}<footer class="page-footer">{{ footer_text }}</footer>{% endif %}
+</main>
+{% if show_search %}
+<script>
+const f = document.getElementById('filter');
+const empty = document.getElementById('empty');
+f.focus();
+f.addEventListener('input', () => {
+  const q = f.value.trim().toLowerCase();
+  let any = false;
+  document.querySelectorAll('.item').forEach(li => {
+    const hit = !q || li.dataset.search.includes(q);
+    li.style.display = hit ? '' : 'none';
+    if (hit) any = true;
+  });
+  document.querySelectorAll('.group').forEach(g => {
+    const visible = Array.from(g.querySelectorAll('.item'))
+                         .some(li => li.style.display !== 'none');
+    g.style.display = visible ? '' : 'none';
+  });
+  empty.hidden = any;
+});
+</script>
+{% endif %}
+</body>
+</html>

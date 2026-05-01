@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en"{% if rtl %} dir="rtl"{% endif %}>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,6 +9,8 @@
   --bg: {{ theme_vars.bg }};
   --text: {{ theme_vars.text }};
   --accent: {{ theme_vars.accent }};
+  --secondary: {{ theme_vars.secondary or theme_vars.accent }};
+  --muted: {{ theme_vars.muted or 'color-mix(in srgb, ' ~ theme_vars.text ~ ' 55%, transparent)' }};
 }
 * { box-sizing: border-box; }
 html, body {
@@ -20,7 +22,7 @@ html, body {
 }
 .wrap { padding: 24px; max-width: 1400px; margin: 0 auto; }
 h1 { font-size: 28px; margin: 0 0 6px; }
-.meta { color: color-mix(in srgb, var(--text) 55%, transparent); font-size: 13px; margin-bottom: 18px; }
+.meta { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
 .filter {
   width: 100%;
   padding: 10px 14px;
@@ -33,7 +35,7 @@ h1 { font-size: 28px; margin: 0 0 6px; }
   outline: none;
   transition: border-color 120ms;
 }
-.filter:focus { border-color: var(--accent); }
+.filter:focus { border-color: var(--secondary); }
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -73,7 +75,7 @@ h1 { font-size: 28px; margin: 0 0 6px; }
   display: flex;
   align-items: center;
   justify-content: center;
-  color: color-mix(in srgb, var(--text) 50%, transparent);
+  color: var(--muted);
   font-size: 11px;
   padding: 8px;
   text-align: center;
@@ -123,7 +125,13 @@ h1 { font-size: 28px; margin: 0 0 6px; }
 .lb-close { top: 18px; right: 18px; }
 .lb-prev { left: 18px; top: 50%; transform: translateY(-50%); }
 .lb-next { right: 18px; top: 50%; transform: translateY(-50%); }
-.empty { color: color-mix(in srgb, var(--text) 50%, transparent); margin-top: 20px; }
+.empty { color: var(--muted); margin-top: 20px; }
+.page-footer {
+  margin-top: 32px; padding-top: 14px; text-align: center;
+  border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  color: var(--muted); font-size: 12px;
+}
+[dir="rtl"] body { text-align: right; }
 </style>
 </head>
 <body>
@@ -144,6 +152,7 @@ h1 { font-size: 28px; margin: 0 0 6px; }
     {%- endfor %}
   </div>
   <p class="empty" id="empty" hidden>No matches.</p>
+  {% if footer_text %}<footer class="page-footer">{{ footer_text }}</footer>{% endif %}
 </main>
 
 <div class="lightbox" id="lightbox" aria-hidden="true">

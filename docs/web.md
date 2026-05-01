@@ -32,7 +32,7 @@ Top navigation is a tab bar. Each tab owns its own panel; only one is visible at
 | 📄 **Documents** | Scoped search over PDFs, ebooks, office files, plain-text formats. Toggle list ↔ grid. Per-extension icons. *Contributed by the `document` enricher plugin.* |
 | 🎬 **Videos** | Scoped search over `kind == "video"` items. Poster-thumbnail grid with duration overlay and channel name. |
 | ✨ **Ask**    | Semantic vector search against the ChromaDB index plus an LLM-synthesized answer. Hits the same code path as `booki chat`. Requires `booki ingest` to have run at least once. |
-| ⚙ **Manage** | Sub-tab interface — **Doctor / Status** (the live availability checks: installed packages, external binaries, provider config), **General** (paths, providers, models), **Plugins** (installed sources / enrichers / exporters / tab contributions), **Logs** (file picker + tail + follow with per-line JSON parsing and color-coded log levels). |
+| ⚙ **Manage** | Sub-tab interface — **Doctor / Status** (live availability checks: installed packages, external binaries, provider config), **General** (paths, providers, models), **Plugins** (installed sources / enrichers / exporters / tab contributions), **🔄 Sync & Ingest** (run `booki sync` / `booki ingest` as background subprocess jobs with chip-pickable sources / enrichers, indeterminate progress bar, exit-status pill, expandable log fold, ⏹ Stop), **✈️ Tasks** (background export tasks — same task-row UI), **Logs** (file picker + tail + follow with per-line JSON parsing and color-coded log levels). |
 
 Plugins can contribute their own top-level tabs by registering a `TabContribution` and shipping a `tab.js` + `tab.css` — see [`plugins_dev.md`](plugins_dev.md#tab-plugins). Built-in tabs use the same registration API.
 
@@ -45,8 +45,9 @@ Press `/` to focus the Search input from anywhere. In Search, `↑/↓` previews
 - **Lists** — create regular lists by tagging items, or define **smart lists** in `config.toml` (filter / query specs). Smart-list specs are re-read from disk on every request, so edits take effect on the next page refresh — no restart.
 - **Add a link** from the top bar; the URL is fetched, deduped against existing items, and dropped into a default location.
 - **Download a video** for offline viewing — uses `yt-dlp` via `download.py`. The job runs in the background; the UI polls for completion and the `.md` file is updated with `download_path_video` so the `offline_archive` exporter can reuse it.
-- **Run the export wizard** (`⬇ Export` in the header) — pick a selection (lists / tags / filters / manual ids — combined as a union), an exporter, a theme, and per-exporter options; preview the result; download the artifact. Save the configured selection + options for re-running later.
-- **System status** is in the Manage tab (Doctor sub-tab) — installed packages, external binaries (`monolith`, `yt-dlp`, `ffmpeg`), and provider configuration (Ollama running? `OPENAI_API_KEY` set? Safari accessible?).
+- **Switch view modes** — every result-bearing tab (Search, Photos, Videos, Ask) has a **list / grid / table** toggle in its header. Mode persists per tab in `localStorage`. List keeps each tab's rich rows (score chips, image thumbnails, video posters); grid is a generic favicon-glyph tile or the existing image grid; table shows compact rows of *glyph · Name · Source · Type · ★ · Tags*.
+- **Run the export wizard** (`⬇ Export` in the header) — a 4-step inline panel mounted at the top of the active tab: **Exporter** (pick from registered plugins, with runtime notes flagging optional deps), **Options** (per-exporter form including footer text, `dir="rtl"` for Arabic / Hebrew, hide-inline-search, page title, etc.), **Organize** (drag-and-drop tree builder for the selection — auto-group by tag / kind / source / list / browser folder / importance, then drag items between folders, create / rename / delete folders, exclude items; forgiving drop targets), **Preview** (HTML output in a sandboxed iframe, JSON / YAML / CSV / Markdown syntax-highlighted, manifest table for background exporters; switching theme or color scheme re-renders live). Hierarchy-aware exporters (`bookmark_file`, `data`) emit nested folders; flat exporters honor the manual order. Background exporters (`offline_archive`) queue as a task in **Manage › Tasks**. While the wizard is open, the underlying results list / grid is hidden so the wizard is the focus.
+- **System status** is in the Manage tab (Doctor sub-tab) — installed packages, optional deps (`playwright` + `chromium` browser for full-fidelity HTML capture in `offline_archive`, `yt-dlp` + `ffmpeg` for video downloads), and provider configuration (Ollama running? `OPENAI_API_KEY` set? Safari accessible?).
 
 ## API
 
@@ -69,11 +70,18 @@ The UI is a thin client over a JSON API. Useful endpoints if you want to script 
 | `POST /api/ask`                                 | semantic search + LLM synthesis |
 | `POST /api/bookmarks/{id}/download`             | start a yt-dlp download |
 | `GET  /api/bookmarks/{id}/download`             | poll the download status |
-| `GET  /api/exporters`                           | list registered exporters with their options |
-| `GET  /api/themes?exporter=…`                   | list themes for an exporter |
-| `GET  /api/export/configs`                      | list saved export configurations |
-| `POST /api/export/run`                          | run an export, returns a download token |
-| `GET  /api/export/download/{token}`             | download the artifact |
+| `GET  /api/export/exporters?kind=…`             | list exporters applicable to this tab's kind, with `supports_hierarchy`, `runtime_notes`, options schema |
+| `GET  /api/export/themes?exporter=…`            | list themes for an exporter (with `has_thumbnail`) |
+| `GET  /api/export/themes/{kind}/{slug}/thumbnail` | serve a theme's `thumbnail.png` |
+| `GET  /api/export/colorschemes`                 | named color palettes (Catppuccin, Tokyo Night, …) for the wizard's scheme picker |
+| `POST /api/export/options`                      | dynamic options schema (exporters can customize per-selection) |
+| `POST /api/export/preview`                      | render a preview of what `run` would produce — HTML / text / manifest, accepts the `tree` from the Organize step |
+| `POST /api/export/run`                          | stream the file (immediate exporters) or return `{task_id}` (background); accepts `theme`, `theme_vars`, `options`, `item_ids`, `tree` |
+| `GET  /api/export/tasks`                        | list background export tasks |
+| `GET  /api/export/tasks/{id}` · `…/artifact` · `POST …/retry` · `DELETE …` | inspect / download / retry / delete |
+| `POST /api/jobs/run`                            | queue a sync / ingest subprocess job (allowlisted flags + safe values) |
+| `GET  /api/jobs` · `GET /api/jobs/{id}`         | list / inspect jobs (status, exit code, streamed log) |
+| `POST /api/jobs/{id}/cancel` · `DELETE /api/jobs/{id}` | terminate / delete a job |
 | `GET  /api/tabs`                                | plugin-contributed tab metadata + module / style URLs |
 | `GET  /api/plugins`                             | enumerate sources / enrichers / exporters / tab contributions |
 | `GET  /api/logs`                                | list rotated Booki log files in the configured logs dir |
