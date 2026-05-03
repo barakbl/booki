@@ -257,23 +257,65 @@ function rowActionsHtml(bm) {
 }
 
 // One delegated listener; covers every result tab + the export drawer's
-// detail rows without needing per-renderer wiring.
+// detail rows without needing per-renderer wiring. Runs in *capture*
+// phase so we can stop the row's bubble-phase click → openDetail()
+// handler before it fires (the drawer must NOT open when the user
+// clicks one of the icons).
 document.addEventListener("click", (e) => {
   const action = e.target.closest(".row-action");
   if (!action) return;
-  // Don't bubble into the row's own click → openDetail() handler.
   e.stopPropagation();
   const copyUrl = action.dataset.copyUrl;
   if (copyUrl == null) return;          // open-in-new-tab anchor: let it through
   e.preventDefault();
+  copyUrlToClipboard(copyUrl);
+}, true);
+
+function copyUrlToClipboard(url) {
+  if (!url) return;
   if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(copyUrl)
+    navigator.clipboard.writeText(url)
       .then(() => showToast("URL copied"))
       .catch(() => showToast("Copy failed"));
   } else {
     showToast("Clipboard API unavailable");
   }
-});
+}
+
+function openUrlInNewTab(url) {
+  if (!url) return;
+  window.open(url, "_blank", "noopener");
+}
+
+// Shortcut targets — each results-bearing tab points at the bookmark
+// "currently selected" by its own UI:
+//   - Search: the keyboard-highlighted row (state.selected over state.filtered)
+//   - Photos / Videos / Documents / Ask: the focused tile/row, then the first
+//     visible item if nothing is focused.
+function _selectedBookmarkForShortcut() {
+  if (state.tab === "search") {
+    const row = state.filtered[state.selected];
+    if (row?.bm) return row.bm;
+  }
+  const active = document.activeElement;
+  const node = active && active.closest?.("[data-id]");
+  if (node) {
+    const bm = state.all.find(b => b.id === node.dataset.id);
+    if (bm) return bm;
+  }
+  // Fallback: the first visible item in the active tab's results.
+  const containers = ["#results", "#photoGrid", "#videoGrid", "#docResults", "#askSources"];
+  for (const sel of containers) {
+    const host = document.querySelector(sel);
+    if (!host || host.offsetParent === null) continue;  // hidden tab — skip
+    const first = host.querySelector("[data-id]");
+    if (first) {
+      const bm = state.all.find(b => b.id === first.dataset.id);
+      if (bm) return bm;
+    }
+  }
+  return null;
+}
 
 // ─── View-mode toggle (list / grid / table) ────────────────────────
 //
@@ -1334,6 +1376,20 @@ window.addEventListener("keydown", (e) => {
       const row = state.filtered[state.selected];
       if (row) openDetail(row.bm.id).then(openEdit);
     }
+  }
+
+  // Quick actions on whatever item the active tab considers "selected".
+  // `t` opens it in a new tab, `c` copies its URL — match the per-row
+  // ↗ / ⧉ icons so users have keyboard parity with the mouse path.
+  // Only fire outside text inputs and without modifier keys (so Cmd-T
+  // etc. still work as the OS expects).
+  if (!inTyping && !e.metaKey && !e.ctrlKey && !e.altKey
+      && (e.key === "t" || e.key === "c")) {
+    const bm = _selectedBookmarkForShortcut();
+    if (!bm || !bm.url) return;
+    e.preventDefault();
+    if (e.key === "t") openUrlInNewTab(bm.url);
+    else copyUrlToClipboard(bm.url);
   }
 });
 
