@@ -2852,9 +2852,10 @@ body.refine-dragging .tree .tree { padding-top: 2px; padding-bottom: 2px; }
 }
 .job-chip:hover { color: var(--text); border-color: var(--border-strong); }
 .job-chip.on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--bg);
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: #fff;
+  font-weight: 600;
 }
 .job-chip.disabled {
   opacity: 0.45;
