@@ -1942,6 +1942,38 @@ mark.hl {
   filter: brightness(1.1);
   border-color: var(--accent-strong);
 }
+
+/* ─── Confirm dialog ──────────────────────────────────────────────
+   Themed replacement for window.confirm(). Reuses .modal + .modal-inner
+   for backdrop + container; the bits below scope just to the smaller
+   message-only layout (no <form>, no scroll). */
+#confirmDialog .modal-inner.confirm-dialog {
+  max-width: 440px;
+}
+.confirm-message {
+  margin: 0;
+  padding: 18px 20px 4px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.confirm-actions {
+  padding: 14px 20px 16px;
+}
+/* Destructive actions (Delete / Remove / Discard) get a red tint so the
+   user has one more visual cue before pulling the trigger. */
+.form-actions .btn.primary.danger,
+.confirm-actions .btn.primary.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.form-actions .btn.primary.danger:hover,
+.confirm-actions .btn.primary.danger:hover {
+  filter: brightness(1.1);
+  border-color: var(--danger);
+}
 .edit-status {
   padding: 0 20px 16px;
   margin: 0;

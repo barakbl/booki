@@ -145,6 +145,7 @@ const els = {
   editKeywords: $("editKeywords"),
   editStatus: $("editStatus"),
   toast: $("toast"),
+  confirmDialog: $("confirmDialog"),
   fuzzyToggle: $("fuzzyToggle"),
 };
 
@@ -168,6 +169,71 @@ function showToast(msg, ms = 1800) {
   els.toast.classList.remove("hidden");
   clearTimeout(showToast._t);
   showToast._t = setTimeout(() => els.toast.classList.add("hidden"), ms);
+}
+
+// Themed replacement for the browser's blocking native confirm() — same
+// boolean answer, but rendered with the rest of the app's modals so it
+// doesn't ruin the dark UI in the middle of a task. Returns a Promise
+// that resolves to `true` (Confirm) or `false` (Cancel / Esc / backdrop).
+//
+//   const ok = await confirmDialog({ message: "Delete?", confirmLabel: "Delete", danger: true });
+//   if (!ok) return;
+//
+// Reusable across the host *and* plugin tabs (exposed as
+// `window.booki.ui.confirm`). Falls back to native confirm() if the
+// dialog DOM hasn't been mounted yet.
+function confirmDialog({
+  title = "Are you sure?",
+  message = "",
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  danger = false,
+} = {}) {
+  return new Promise((resolve) => {
+    const dlg = els.confirmDialog;
+    if (!dlg) { resolve(window.confirm(message || title)); return; }
+
+    dlg.querySelector("[data-role=title]").textContent = title;
+    dlg.querySelector("[data-role=message]").textContent = message;
+    const ok = dlg.querySelector("[data-role=confirm]");
+    const cancel = dlg.querySelector("[data-role=cancel]");
+    ok.textContent = confirmLabel;
+    cancel.textContent = cancelLabel;
+    ok.classList.toggle("danger", !!danger);
+
+    // Capture whichever element had focus so we can put it back when
+    // the dialog closes — keeps keyboard nav predictable.
+    const prevFocus = document.activeElement;
+
+    const close = (result) => {
+      dlg.classList.add("hidden");
+      dlg.setAttribute("aria-hidden", "true");
+      ok.removeEventListener("click", onOk);
+      cancel.removeEventListener("click", onCancel);
+      dlg.removeEventListener("click", onBackdrop);
+      window.removeEventListener("keydown", onKey, true);
+      try { prevFocus?.focus?.(); } catch {}
+      resolve(result);
+    };
+    const onOk = () => close(true);
+    const onCancel = () => close(false);
+    const onBackdrop = (e) => { if (e.target === dlg) close(false); };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(false); }
+      else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); close(true); }
+    };
+
+    ok.addEventListener("click", onOk);
+    cancel.addEventListener("click", onCancel);
+    dlg.addEventListener("click", onBackdrop);
+    // Capture phase so the global Escape handler in app.js doesn't
+    // close the bookmark drawer underneath when dismissing the dialog.
+    window.addEventListener("keydown", onKey, true);
+
+    dlg.classList.remove("hidden");
+    dlg.setAttribute("aria-hidden", "false");
+    cancel.focus();
+  });
 }
 
 // ─── Substring / word search (default) ─────────────────────────────
@@ -1925,6 +1991,10 @@ window.booki.bookmarks = {
 };
 window.booki.ui = {
   toast: (msg) => showToast(msg),
+  // Themed replacement for window.confirm — returns Promise<boolean>.
+  // Plugins should prefer this over native confirm() so the dark UI
+  // stays consistent.
+  confirm: (opts) => confirmDialog(opts),
   // Open the bookmark detail drawer by id. Aliased as openDetail too —
   // the host's internal function is `openDetail`, kept for callers who
   // already know the name.
@@ -3919,12 +3989,19 @@ async function renderRefineStep() {
     <button type="button" class="btn small" id="refineRebuild" title="Discard manual edits and rebuild from the grouping">↺ Rebuild</button>
     <span class="refine-meta">${exportState.itemIds.length} item${exportState.itemIds.length === 1 ? "" : "s"} selected${dirtyBadge}</span>`;
 
-  toolbar.querySelector("#refineGrouping").addEventListener("change", (ev) => {
+  toolbar.querySelector("#refineGrouping").addEventListener("change", async (ev) => {
     const next = ev.target.value;
-    if (exportState.treeDirty
-        && !confirm("Switching grouping will discard your manual edits. Continue?")) {
-      ev.target.value = exportState.treeGrouping;
-      return;
+    if (exportState.treeDirty) {
+      const ok = await confirmDialog({
+        title: "Switch grouping?",
+        message: "Switching grouping will discard your manual edits. Continue?",
+        confirmLabel: "Switch",
+        danger: true,
+      });
+      if (!ok) {
+        ev.target.value = exportState.treeGrouping;
+        return;
+      }
     }
     exportState.treeGrouping = next;
     exportState.tree = _buildTreeFromGrouping(exportState.itemIds, next);
@@ -3938,9 +4015,16 @@ async function renderRefineStep() {
     exportState.treeDirty = true;
     renderRefineStep();
   });
-  toolbar.querySelector("#refineRebuild").addEventListener("click", () => {
-    if (exportState.treeDirty
-        && !confirm("Discard manual edits and rebuild from the grouping?")) return;
+  toolbar.querySelector("#refineRebuild").addEventListener("click", async () => {
+    if (exportState.treeDirty) {
+      const ok = await confirmDialog({
+        title: "Rebuild tree?",
+        message: "Discard manual edits and rebuild from the grouping?",
+        confirmLabel: "Rebuild",
+        danger: true,
+      });
+      if (!ok) return;
+    }
     exportState.tree = _buildTreeFromGrouping(exportState.itemIds, exportState.treeGrouping);
     exportState.treeDirty = false;
     renderRefineStep();
@@ -4005,8 +4089,14 @@ function _renderFolder(node) {
   });
   head.querySelector(".tree-rename").addEventListener("click", () => _renameFolder(node));
   head.querySelector(".tree-name").addEventListener("dblclick", () => _renameFolder(node));
-  head.querySelector(".tree-remove").addEventListener("click", () => {
-    if (!confirm(`Remove folder "${node.name}" and everything inside?`)) return;
+  head.querySelector(".tree-remove").addEventListener("click", async () => {
+    const ok = await confirmDialog({
+      title: "Remove folder",
+      message: `Remove folder "${node.name}" and everything inside?`,
+      confirmLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
     _removeNode(node.id);
     exportState.treeDirty = true;
     renderRefineStep();
@@ -4651,7 +4741,13 @@ async function refreshManageTasks() {
       refreshManageTasks();
     });
     row.querySelector(".task-delete")?.addEventListener("click", async () => {
-      if (!confirm("Delete this task and its artifact?")) return;
+      const ok = await confirmDialog({
+        title: "Delete task",
+        message: "Delete this task and its artifact?",
+        confirmLabel: "Delete",
+        danger: true,
+      });
+      if (!ok) return;
       await fetch(`/api/export/tasks/${id}`, { method: "DELETE" });
       refreshManageTasks();
     });
@@ -4874,7 +4970,13 @@ async function refreshManageJobs() {
       refreshManageJobs();
     });
     row.querySelector(".task-delete")?.addEventListener("click", async () => {
-      if (!confirm("Delete this job record?")) return;
+      const ok = await confirmDialog({
+        title: "Delete job",
+        message: "Delete this job record?",
+        confirmLabel: "Delete",
+        danger: true,
+      });
+      if (!ok) return;
       await fetch(`/api/jobs/${row.dataset.id}`, { method: "DELETE" });
       refreshManageJobs();
     });
