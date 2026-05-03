@@ -1310,7 +1310,9 @@ main {
 }
 .bar-row .bar-fill {
   position: absolute; inset: 0 auto 0 0;
-  background: linear-gradient(90deg, rgba(139,92,246,0.22), rgba(6,182,212,0.22));
+  /* Solid translucent --accent — matches the purple used by the toggle
+     buttons and chip "on" state (was a purple→cyan gradient). */
+  background: rgba(139, 92, 246, 0.28);
 }
 .bar-row .bar-label {
   position: relative;
@@ -2671,6 +2673,29 @@ body.refine-dragging .tree .tree { padding-top: 2px; padding-bottom: 2px; }
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+/* Wizard nav (Back / Next →) reuses the flat, square-ish look of the
+   List/Grid/Table toggle and the Sync/Ingest run buttons — same family
+   throughout the UI instead of the rounded gradient default of .btn. */
+.export-buttons .btn {
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.export-buttons .btn.primary {
+  background: var(--accent-strong);
+  border: 1px solid var(--accent-strong);
+  color: #fff;
+}
+.export-buttons .btn.primary:hover {
+  filter: brightness(1.1);
+  border-color: var(--accent-strong);
+}
+.export-buttons .btn.primary:disabled,
+.export-buttons .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .export-status {
   margin: 0;
