@@ -70,8 +70,8 @@ side-by-side and clicks open the full-size asset. GitHub renders this. -->
   <sub><b>web doctor</b></sub>
 </td>
 <td align="center" width="25%">
-  <a href="docs/screen/injest%20and%20sync%20web%20ui.png"><img src="docs/screen/injest%20and%20sync%20web%20ui.png" width="100%" alt="injest and sync web ui"></a><br>
-  <sub><b>injest and sync web ui</b></sub>
+  <a href="docs/screen/ingest%20and%20sync%20web%20ui.png"><img src="docs/screen/ingest%20and%20sync%20web%20ui.png" width="100%" alt="ingest and sync web ui"></a><br>
+  <sub><b>ingest and sync web ui</b></sub>
 </td>
 <td align="center" width="25%">
   <a href="docs/screen/export%20wizard.png"><img src="docs/screen/export%20wizard.png" width="100%" alt="export wizard"></a><br>
