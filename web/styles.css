@@ -1566,6 +1566,15 @@ main {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+/* Grayed-out variant — used for ↗ on file:// items (browsers block
+   navigating to them from an http(s) page). Looks dim and doesn't
+   highlight on hover so it reads as 'not actionable here'. */
+.row-action.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+  color: var(--text-faint);
+}
 
 /* Tile overlay variant — sits in the top-right of photo / video / doc
    / generic-grid tiles. Hidden until tile hover so it doesn't fight

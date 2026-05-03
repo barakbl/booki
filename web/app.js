@@ -248,9 +248,18 @@ function rowActionsHtml(bm) {
   const url = bm?.url || "";
   if (!url) return "";
   const safe = escapeHtml(url);
+  // Browsers block opening file:// URLs from an http(s):// page (security
+  // sandbox), so the ↗ button can't actually launch them. Render it
+  // visually disabled instead of a dead-end click. Copy still works —
+  // pasting the path into Finder / Terminal is the usual workflow.
+  const isLocal = /^file:/i.test(url);
+  const openIcon = isLocal
+    ? `<span class="row-action disabled" aria-disabled="true"`
+       + ` title="Local file — open it from your file manager" tabindex="-1">↗</span>`
+    : `<a class="row-action" href="${safe}" target="_blank" rel="noopener"`
+       + ` title="Open in new tab" aria-label="Open in new tab">↗</a>`;
   return `<span class="row-actions">`
-    + `<a class="row-action" href="${safe}" target="_blank" rel="noopener"`
-    +    ` title="Open in new tab" aria-label="Open in new tab">↗</a>`
+    + openIcon
     + `<button type="button" class="row-action" data-copy-url="${safe}"`
     +    ` title="Copy URL" aria-label="Copy URL">⧉</button>`
     + `</span>`;
@@ -284,6 +293,12 @@ function copyUrlToClipboard(url) {
 
 function openUrlInNewTab(url) {
   if (!url) return;
+  // Browsers refuse to navigate to file:// from an http(s) page — surface
+  // the limitation as a toast instead of a silent no-op.
+  if (/^file:/i.test(url)) {
+    showToast("Local file — open from your file manager");
+    return;
+  }
   window.open(url, "_blank", "noopener");
 }
 
