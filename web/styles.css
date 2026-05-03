@@ -2831,8 +2831,10 @@ body.refine-dragging .tree .tree { padding-top: 2px; padding-bottom: 2px; }
 }
 /* Sync / Ingest "Run" buttons match the view-toggle's flat purple look
    (solid var(--accent), 6px radius) instead of .btn.primary's rounded
-   gradient — visually consistent with the List / Grid / Table buttons. */
-.job-run-btn {
+   gradient — visually consistent with the List / Grid / Table buttons.
+   Selector keeps `.btn.primary` in the chain so it outranks the gradient
+   rule above without resorting to !important. */
+.btn.primary.job-run-btn {
   align-self: flex-start;
   background: var(--accent);
   border: 1px solid var(--accent);
@@ -2842,7 +2844,7 @@ body.refine-dragging .tree .tree { padding-top: 2px; padding-bottom: 2px; }
   font-size: 13px;
   font-weight: 600;
 }
-.job-run-btn:hover {
+.btn.primary.job-run-btn:hover {
   filter: brightness(1.1);
   border-color: var(--accent);
 }
