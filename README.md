@@ -32,7 +32,7 @@ Booki pulls items from **pluggable sources** — Chrome / Safari / Firefox bookm
 
 - **🪄 4-step export wizard** — *Exporter → Options → Organize → Preview*. Drag-and-drop tree, sandboxed live preview, per-export RTL / footer / search-toggle options.
 
-- **📤 Pluggable exporters** — themed HTML page, offline ZIP (full pages + PDFs + videos), data dumps (CSV / JSON / YAML / Markdown), photo galleries, Netscape bookmarks.
+- **📤 Pluggable exporters** — themed HTML page, offline ZIP (full pages + PDFs + videos), data dumps (CSV / JSON / YAML / Markdown), photo galleries, browser-importable bookmarks file.
 
 - **🎨 Themes + color schemes** — `basic`, `ratatui`, `fun`. Catppuccin and Tokyo Night palettes baked in; per-theme thumbnail mocks.
 
