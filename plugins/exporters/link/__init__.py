@@ -54,8 +54,9 @@ class LinkPageExporter(Exporter):
          "default": False,
          "help": "Sets dir=\"rtl\" on the page. Themes that support BiDi "
                  "mirror their layout."},
-        {"name": "group_by", "type": "select", "label": "Group by",
-         "options": ["none", "source", "kind", "tag"], "default": "none"},
+        # NOTE: `group_by` was removed from the Options step — use the
+        # Organize tree (step 3) for grouping. The runtime still honors
+        # an incoming `group_by` for back-compat with saved configs.
     ]
 
     def run_immediate(self, items, options, theme, theme_vars, tree=None):

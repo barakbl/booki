@@ -42,10 +42,10 @@ class BookmarkFileExporter(Exporter):
     options_schema = [
         {"name": "root_folder", "type": "text", "label": "Root folder",
          "default": "Booki Export"},
-        {"name": "group_by", "type": "select", "label": "Group by (when no Refine tree)",
-         "options": ["none", "source", "kind", "tag", "list"], "default": "none",
-         "help": "Used when the Organize step is skipped. With a tree the "
-                 "structure you built there wins."},
+        # NOTE: `group_by` is no longer surfaced in the Options step — the
+        # Refine tree (step 3) is the canonical place to group items now.
+        # The runtime code below still respects an incoming `group_by` for
+        # back-compat with saved exporter configs.
         {"name": "include_tags", "type": "bool", "label": "Include tags",
          "default": True,
          "help": "Adds a TAGS=\"a,b\" attribute on each link. Firefox and "
