@@ -243,6 +243,7 @@ function render(el) {
 function renderList(rows) {
   const esc = booki.ui.escapeHtml, hl = booki.ui.highlight;
   const topChipFor = (bm) => booki.adv?.topChip?.(bm, "document") || "";
+  const actionsFor = (bm) => booki.ui.rowActionsHtml?.(bm) || "";
   const items = rows.map(({ bm, titleMatches, urlMatches }) => {
     const type = docType(bm);
     const icon = iconFor(bm);
@@ -257,6 +258,7 @@ function renderList(rows) {
           ${topChipFor(bm)}
           ${type ? `<span class="doc-type-chip">${esc(type)}</span>` : ""}
           ${bm.importance ? `<span class="doc-imp">★${bm.importance}</span>` : ""}
+          ${actionsFor(bm)}
         </div>
       </li>`;
   }).join("");
@@ -273,6 +275,7 @@ function truncate(s, n) {
 function renderGrid(rows) {
   const esc = booki.ui.escapeHtml;
   const topChipFor = (bm) => booki.adv?.topChip?.(bm, "document") || "";
+  const actionsFor = (bm) => booki.ui.rowActionsHtml?.(bm) || "";
   const tiles = rows.map(({ bm }) => {
     const type    = docType(bm);
     const icon    = iconFor(bm);
@@ -280,7 +283,10 @@ function renderGrid(rows) {
     const top     = topChipFor(bm);
     return `
       <li class="doc-tile" tabindex="0" data-id="${esc(bm.id)}">
-        <div class="doc-tile-thumb"><span class="doc-tile-icon">${icon}</span></div>
+        <div class="doc-tile-thumb">
+          <span class="doc-tile-icon">${icon}</span>
+          <div class="tile-actions">${actionsFor(bm)}</div>
+        </div>
         <div class="doc-tile-meta">
           <div class="doc-tile-title" title="${esc(bm.title || '')}">${esc(bm.title || "(untitled)")}</div>
           ${summary

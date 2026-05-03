@@ -239,6 +239,42 @@ function highlight(text, matches) {
   return out;
 }
 
+// ─── Per-row action icons ──────────────────────────────────────────
+// Two tiny buttons rendered into every result row (and tile): open in
+// new tab + copy URL. Wired through document-level delegation below so
+// renderers can drop in the markup without re-registering listeners.
+
+function rowActionsHtml(bm) {
+  const url = bm?.url || "";
+  if (!url) return "";
+  const safe = escapeHtml(url);
+  return `<span class="row-actions">`
+    + `<a class="row-action" href="${safe}" target="_blank" rel="noopener"`
+    +    ` title="Open in new tab" aria-label="Open in new tab">↗</a>`
+    + `<button type="button" class="row-action" data-copy-url="${safe}"`
+    +    ` title="Copy URL" aria-label="Copy URL">⧉</button>`
+    + `</span>`;
+}
+
+// One delegated listener; covers every result tab + the export drawer's
+// detail rows without needing per-renderer wiring.
+document.addEventListener("click", (e) => {
+  const action = e.target.closest(".row-action");
+  if (!action) return;
+  // Don't bubble into the row's own click → openDetail() handler.
+  e.stopPropagation();
+  const copyUrl = action.dataset.copyUrl;
+  if (copyUrl == null) return;          // open-in-new-tab anchor: let it through
+  e.preventDefault();
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(copyUrl)
+      .then(() => showToast("URL copied"))
+      .catch(() => showToast("Copy failed"));
+  } else {
+    showToast("Clipboard API unavailable");
+  }
+});
+
 // ─── View-mode toggle (list / grid / table) ────────────────────────
 //
 // A small button group every results-bearing tab (Search, Photos, Videos,
@@ -327,13 +363,14 @@ function renderItemsTable(host, items, opts = {}) {
       <td class="col-kind">${escapeHtml(kind)}</td>
       <td class="col-imp">${imp}</td>
       ${topCell}
+      <td class="col-actions">${rowActionsHtml(bm)}</td>
     </tr>`;
   }).join("");
   const topHead = showTop ? `<th class="col-top-head">${escapeHtml(topLabel)}</th>` : "";
   host.innerHTML = `
     <table class="items-table">
       <thead>
-        <tr><th></th><th>Name</th><th>Source</th><th>Type</th><th>★</th>${topHead}</tr>
+        <tr><th></th><th>Name</th><th>Source</th><th>Type</th><th>★</th>${topHead}<th></th></tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>`;
@@ -366,6 +403,7 @@ function renderItemsGrid(host, items, opts = {}) {
              onerror="this.onerror=null;this.src='${DEFAULT_FAV}';">
         <span class="g-glyph" title="${escapeHtml(kind)}">${glyph}</span>
         ${imp}
+        <div class="tile-actions">${rowActionsHtml(bm)}</div>
       </div>
       <div class="g-meta">
         <div class="g-title" title="${escapeHtml(bm.title || "")}">${escapeHtml(bm.title || "(untitled)")}</div>
@@ -417,6 +455,7 @@ function renderItemsList(host, items, opts = {}) {
       <div class="row-right">
         ${topChip}
         ${imp}
+        ${rowActionsHtml(bm)}
       </div>
     </li>`;
   }).join("");
@@ -1200,6 +1239,7 @@ function renderRow(row, selected, adv) {
   if (bm.importance > 0) {
     scoreChips.push(`<span class="star">★${bm.importance}</span>`);
   }
+  scoreChips.push(rowActionsHtml(bm));
   right.innerHTML = scoreChips.join("");
   li.appendChild(right);
 
@@ -1820,8 +1860,12 @@ window.booki.ui = {
   openDrawer: (id) => openDetail(id),
   openDetail: (id) => openDetail(id),
   // Helpers a plugin tab is likely to want when rendering items inline.
-  escapeHtml: (s) => escapeHtml(s),
-  highlight:  (text, matches) => highlight(text, matches),
+  escapeHtml:     (s) => escapeHtml(s),
+  highlight:      (text, matches) => highlight(text, matches),
+  // Per-row open-in-new-tab + copy-URL icons. Drop the returned HTML
+  // anywhere in your row — clicks are handled by the host's delegated
+  // listener, no per-tab wiring needed.
+  rowActionsHtml: (bm) => rowActionsHtml(bm),
   // Plugin tabs that own their results container (and therefore declare
   // `getSelection`) call this after re-rendering so the topbar's
   // "⬇ Export N items" label refreshes. Built-in tabs use it implicitly
@@ -2055,7 +2099,10 @@ function renderPhotoGrid() {
 
     const topChip = topFieldChipHtml(b, adv);
     li.innerHTML = `
-      <div class="photo-thumb">${imgHtml}</div>
+      <div class="photo-thumb">
+        ${imgHtml}
+        <div class="tile-actions">${rowActionsHtml(b)}</div>
+      </div>
       <div class="photo-meta">
         <div class="photo-title" title="${escapeHtml(b.title || '')}">${escapeHtml(b.title || "(untitled)")}</div>
         ${b.importance ? `<div class="photo-imp">★${b.importance}</div>` : ""}
@@ -2245,6 +2292,7 @@ function renderVideoGrid() {
       <div class="video-thumb">
         ${thumbHtml}
         ${durHtml}
+        <div class="tile-actions">${rowActionsHtml(b)}</div>
       </div>
       <div class="video-meta">
         <div class="video-title" title="${escapeHtml(b.title || '')}">${escapeHtml(b.title || "(untitled)")}</div>

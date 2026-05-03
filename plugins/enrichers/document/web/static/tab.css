@@ -99,6 +99,7 @@
   outline: none;
 }
 .doc-tile-thumb {
+  position: relative;        /* anchor for the host's .tile-actions overlay */
   aspect-ratio: 4 / 3;
   display: flex;
   align-items: center;
