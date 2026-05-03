@@ -2829,7 +2829,23 @@ body.refine-dragging .tree .tree { padding-top: 2px; padding-bottom: 2px; }
   cursor: not-allowed;
   pointer-events: none;
 }
-.job-run-btn { align-self: flex-start; }
+/* Sync / Ingest "Run" buttons match the view-toggle's flat purple look
+   (solid var(--accent), 6px radius) instead of .btn.primary's rounded
+   gradient — visually consistent with the List / Grid / Table buttons. */
+.job-run-btn {
+  align-self: flex-start;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: var(--bg);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.job-run-btn:hover {
+  filter: brightness(1.1);
+  border-color: var(--accent);
+}
 
 .job-args code {
   background: rgba(255, 255, 255, 0.05);
