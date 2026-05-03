@@ -27,6 +27,63 @@ your own  ──┘
 3. **`chat.py`** turns a natural-language query into a vector search and asks the LLM to synthesize an answer over the retrieved items.
 4. **`web.py`** serves the same data via a FastAPI UI for browsing, editing, and running the export wizard. See [`web.md`](web.md).
 
+## The menubar sidecar (`booki-manager`)
+
+A small native app, written in Rust, that drives the pipeline above on a
+schedule. It lives in `tools/booki-manager/` and ships **completely
+separately** from the Python — installing or upgrading either side has
+zero impact on the other.
+
+```
+            ┌──────────────────────────────────────────────────┐
+            │  booki-manager  (Rust, menubar tray icon)        │
+            │  • watches Chrome / Safari / Firefox bookmark    │
+            │    files (via notify-rs)                         │
+            │  • holds [manager.schedule.*]  cadence + window  │
+            │  • holds [manager.sync] enrich / enrich-meta     │
+            └────────────────────┬─────────────────────────────┘
+                                 │ HTTP (POST /api/jobs/run)
+                                 ▼
+            ┌──────────────────────────────────────────────────┐
+            │  booki web  (Python, FastAPI)                    │
+            │  • job runner — spawns `booki sync` /            │
+            │    `booki ingest` as subprocess                  │
+            │  • streams progress + log + exit status          │
+            └──────────────────────────────────────────────────┘
+```
+
+What it actually does:
+
+1. **Reads `config.toml`** for `[web]` (where the API lives), the enabled
+   `[sources.*]` (which browser bookmark files to watch), and `[manager.*]`
+   (when to fire and what flags to pass).
+2. **Watches** the configured browser bookmark files. A user-visible edit
+   triggers a debounced `booki sync --source <name>` via
+   `POST /api/jobs/run`.
+3. **Schedules** periodic `booki sync` and `booki ingest` runs. A job fires
+   when *both* a cadence period has elapsed since the last successful run
+   *and* the local time falls inside `window` — or that window already
+   ended today (catch-up covers laptops that slept through 02:00).
+4. **`[manager.sync]`** decides which `--enrich` / `--enrich-meta` flags
+   the manager appends to every sync it triggers (manual *and*
+   scheduled). Both default to `true`.
+5. **Tray menu**: status dot, last-sync line, **Sync now** /
+   **Ingest now**, **Open web**, **Pause** / **Pause schedule**, autostart
+   toggle, and quit.
+
+Why it's a separate process (and a separate language):
+
+- **Survives Booki upgrades.** The Python side can move, get reinstalled,
+  or even be down — the tray icon stays in your menubar with a red dot.
+- **Native menubar feel.** `tray-icon` + `tao` give a real platform tray
+  on macOS / Linux / Windows; no Electron, no Python GUI dependency.
+- **Cheap.** A static binary in the tens of MB; no runtime cost when
+  idle.
+
+The manager never reaches into `bookmarks/` or `db/` directly — its only
+side-effect channel is the HTTP job API. That keeps the Python side the
+single source of truth for all state.
+
 ## What Booki is *not* for
 
 - **Not a research-grade RAG.** No re-ranking, no hybrid retrieval, no query rewriting. It's tuned for personal-scale collections, where simple semantic search over enriched titles works surprisingly well.
@@ -58,6 +115,15 @@ booki/
 ├── shells/             # shell integrations (PATH + tab-completion)
 │   ├── booki.fish
 │   └── booki.zsh
+│
+├── tools/
+│   └── booki-manager/  # 🖥️ Rust menubar sidecar (separate cargo project)
+│       ├── Cargo.toml
+│       └── src/        #   tray UI + bookmark-file watcher + cron-style scheduler
+│                       #   talks to the FastAPI job API; never writes bookmarks/ directly
+│
+├── tests/              # 🧪 pytest suite — ingest / store / web / cli
+│   └── conftest.py     #   tmp_path-scoped fixtures (real create_app() under TestClient)
 │
 ├── plugins/            # 🔌 sources / enrichers / exporters / tabs — auto-discovered on import
 │   ├── __init__.py     #   discovery: imports each subpackage so decorators fire
