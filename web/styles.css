@@ -1730,7 +1730,26 @@ mark.hl {
 }
 .chip.imp { color: var(--warn); }
 
-.detail-actions { display: flex; gap: 8px; margin-bottom: 18px; }
+.detail-actions { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
+/* Drawer buttons match the rest of the app's flat purple language —
+   .btn defaults to a rounded 10px gradient/panel look, but inside the
+   drawer we want them to read as the same control family as the
+   List/Grid/Table toggle and the Sync/Ingest run buttons. */
+.detail-actions .btn {
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.detail-actions .btn.primary {
+  background: var(--accent-strong);
+  border: 1px solid var(--accent-strong);
+  color: #fff;
+}
+.detail-actions .btn.primary:hover {
+  filter: brightness(1.1);
+  border-color: var(--accent-strong);
+}
 
 .btn {
   background: var(--panel-2);
