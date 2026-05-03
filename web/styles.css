@@ -2838,11 +2838,12 @@ body.refine-dragging .tree .tree { padding-top: 2px; padding-bottom: 2px; }
   align-self: flex-start;
   background: var(--accent);
   border: 1px solid var(--accent);
-  color: var(--bg);
+  /* Pure black reads punchier on the purple than --bg's dark blue tint. */
+  color: #000;
   border-radius: 6px;
   padding: 6px 14px;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
 }
 .btn.primary.job-run-btn:hover {
   filter: brightness(1.1);
