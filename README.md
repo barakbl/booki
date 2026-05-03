@@ -59,39 +59,69 @@ match the filenames in [`docs/screen/`](docs/screen/).
 
 <!-- Inline HTML (instead of plain Markdown images) so the thumbnails sit
 side-by-side and clicks open the full-size asset. GitHub renders this. -->
+
+**Web UI**
+
 <table>
 <tr>
-<td align="center" width="25%">
+<td align="center" width="33%">
   <a href="docs/screen/web%20search.gif"><img src="docs/screen/web%20search.gif" width="100%" alt="web search"></a><br>
   <sub><b>web search</b></sub>
 </td>
-<td align="center" width="25%">
+<td align="center" width="33%">
   <a href="docs/screen/web%20doctor.png"><img src="docs/screen/web%20doctor.png" width="100%" alt="web doctor"></a><br>
   <sub><b>web doctor</b></sub>
 </td>
-<td align="center" width="25%">
+<td align="center" width="33%">
   <a href="docs/screen/ingest%20and%20sync%20web%20ui.png"><img src="docs/screen/ingest%20and%20sync%20web%20ui.png" width="100%" alt="ingest and sync web ui"></a><br>
   <sub><b>ingest and sync web ui</b></sub>
 </td>
-<td align="center" width="25%">
-  <a href="docs/screen/export%20wizard.png"><img src="docs/screen/export%20wizard.png" width="100%" alt="export wizard"></a><br>
-  <sub><b>export wizard</b></sub>
+</tr>
+</table>
+
+**Export wizard** — *Exporter → Options → Organize → Preview*
+
+<table>
+<tr>
+<td align="center" width="33%">
+  <a href="docs/screen/export%20wizard%20step%201%20-%20select%20exporter.png"><img src="docs/screen/export%20wizard%20step%201%20-%20select%20exporter.png" width="100%" alt="export wizard step 1 - select exporter"></a><br>
+  <sub><b>step 1 — select exporter</b></sub>
+</td>
+<td align="center" width="33%">
+  <a href="docs/screen/export%20wizard%20step%202%20-%20options.png"><img src="docs/screen/export%20wizard%20step%202%20-%20options.png" width="100%" alt="export wizard step 2 - options"></a><br>
+  <sub><b>step 2 — options</b></sub>
+</td>
+<td align="center" width="33%">
+  <a href="docs/screen/export%20wizard%20step%203%20-%20organize%20items.png"><img src="docs/screen/export%20wizard%20step%203%20-%20organize%20items.png" width="100%" alt="export wizard step 3 - organize items"></a><br>
+  <sub><b>step 3 — organize items</b></sub>
 </td>
 </tr>
 <tr>
-<td align="center" width="25%">
-  <a href="docs/screen/exporter%20preview%20fun%20theme.png"><img src="docs/screen/exporter%20preview%20fun%20theme.png" width="100%" alt="exporter preview fun theme"></a><br>
-  <sub><b>exporter preview fun theme</b></sub>
+<td align="center" width="33%">
+  <a href="docs/screen/export%20wizard%20step%204%20-%20select%20theme.png"><img src="docs/screen/export%20wizard%20step%204%20-%20select%20theme.png" width="100%" alt="export wizard step 4 - select theme"></a><br>
+  <sub><b>step 4 — select theme</b></sub>
 </td>
-<td align="center" width="25%">
+<td align="center" width="33%">
+  <a href="docs/screen/export%20wizard%20step%204%20-%20preview%20fun%20theme.png"><img src="docs/screen/export%20wizard%20step%204%20-%20preview%20fun%20theme.png" width="100%" alt="export wizard step 4 - preview fun theme"></a><br>
+  <sub><b>step 4 — preview (fun theme)</b></sub>
+</td>
+<td width="33%"></td>
+</tr>
+</table>
+
+**CLI + manager**
+
+<table>
+<tr>
+<td align="center" width="33%">
   <a href="docs/screen/browse%20in%20cli.png"><img src="docs/screen/browse%20in%20cli.png" width="100%" alt="browse in cli"></a><br>
   <sub><b>browse in cli</b></sub>
 </td>
-<td align="center" width="25%">
+<td align="center" width="33%">
   <a href="docs/screen/autocomplete%20in%20cli.gif"><img src="docs/screen/autocomplete%20in%20cli.gif" width="100%" alt="autocomplete in cli"></a><br>
   <sub><b>autocomplete in cli</b></sub>
 </td>
-<td align="center" width="25%">
+<td align="center" width="33%">
   <a href="docs/screen/manager%20tray%20app.png"><img src="docs/screen/manager%20tray%20app.png" width="100%" alt="manager tray app"></a><br>
   <sub><b>manager tray app</b></sub>
 </td>
