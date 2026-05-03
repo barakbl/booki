@@ -1059,9 +1059,10 @@ a:hover { text-decoration: underline; }
   border-color: var(--border-strong);
 }
 .adv-chip.on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--bg);
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: #fff;
+  font-weight: 600;
 }
 .adv-chip-count {
   font-size: 11px;
