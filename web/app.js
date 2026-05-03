@@ -2300,11 +2300,6 @@ Tabs.register({
       els.askResult.classList.remove("hidden");
       root.appendChild(els.askResult);
     }
-    const tb = document.getElementById("askViewToolbar");
-    if (tb) {
-      tb.innerHTML = viewToggleHtml("ask", ["list", "grid", "table"], "list");
-      wireViewToggle(tb, "ask", () => _rerenderAskSources());
-    }
   },
   onShow() { els.askInput?.focus?.(); refreshExportButton(); },
   // Ask tab renders into the same #askSources <ul class="results"> below the
@@ -2849,16 +2844,15 @@ async function runAsk() {
 }
 
 function _rerenderAskSources() {
+  // Ask is list-only — the synthesized answer + ranked sources flow as
+  // a reading experience, not a browsing one, so the list/grid/table
+  // toggle would just add noise. Each source row renders with its
+  // vector-score chip via renderRow.
   const host = els.askSources;
   if (!host) return;
   host.className = "results";
   host.innerHTML = "";
   if (!_askLastResults.length) return;
-  const items = _askLastResults.map(r => r.bm);
-  const mode = _viewModeFor("ask", "list");
-  if (mode === "grid")  { renderItemsGrid(host, items); return; }
-  if (mode === "table") { renderItemsTable(host, items); return; }
-  // list mode — keep the rich renderRow with vector-score chips.
   const frag = document.createDocumentFragment();
   for (const { bm, score } of _askLastResults) {
     frag.appendChild(renderRow(
