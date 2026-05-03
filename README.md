@@ -12,23 +12,42 @@ Booki pulls items from **pluggable sources** — Chrome / Safari / Firefox bookm
 
 ## ✨ Features
 
-- **🔌 Pluggable sources** — bookmarks from Chrome / Safari / Firefox, videos & channels from YouTube, RSS feeds, local directories. Write your own in ~30 lines.
-- **📝 One Markdown file per item** — every bookmark, video, or channel is a first-class document with frontmatter. Editable by hand. Friendly to Git and Obsidian.
-- **🧠 LLM enrichment** — fetches each page and writes a one-sentence summary + keywords back into the file, so search works even on cryptic titles.
-- **🧬 Metadata enrichers** — pluggable per-URL classifiers that promote items to a richer `kind` (`photo`, `video`, `channel`, `document`, …) and tag a cross-cutting `sources` list. Built-ins: GitHub repos, YouTube videos / channels, photos, documents (PDF / docx / md / epub / …).
-- **🔎 Semantic search** — finds items by meaning, not keywords. Cross-language too — English queries match Hebrew titles.
-- **⚡ fzf-powered terminal browser** — `booki browse` opens an instant, fuzzy-matchable picker over your whole library with a live preview pane. Enter to open in your browser, `Ctrl-Y` to copy, `Ctrl-E` to edit the underlying `.md`. No embedding model, no startup cost.
-- **🧩 Browser extension** (Chrome + Firefox) — a side-panel / sidebar picker for your Booki items (Alt+Shift+B by default) with fuzzy search and Enter-to-open, plus right-click "Add to Booki" for any link, page, or image. See [`extra/extension/`](extra/extension/README.md).
-- **🔍 Alfred workflow** (macOS) — `bk <query>` searches your bookmarks from anywhere, Enter opens in your browser, ⌘+Enter copies the URL. See [`extra/alfred/`](extra/alfred/README.md).
-- **🤖 LLM answers** — asks an AI to synthesize an answer over the retrieved items.
-- **🔗 Dead link detection** — flags broken bookmarks and suggests Wayback Machine archives.
-- **📤 Pluggable exporters** — turn a selection into a themed HTML page, an offline ZIP (full pages + PDFs + downloaded videos via `offline_archive`), a CSV / JSON / YAML / Markdown data dump, a themed photo gallery, or a browser-importable Netscape bookmarks file (`bookmark_file`).
-- **🪄 4-step export wizard** — *Exporter → Options → Organize → Preview*, mounted inline at the top of the active tab (and hides the underlying results while it's open so the wizard is the focus). The **Organize** step is a drag-and-drop tree builder with auto-grouping (by tag / kind / source / list / browser folder / importance) and folder rename / delete; forgiving drop targets (gaps inflate during drag, top/bottom of each row act as insert-before/after, folder middle = drop into); hierarchy-aware exporters (`bookmark_file`, `data`) emit nested folders, flat exporters honor the manual order. The **Preview** step renders HTML in a sandboxed iframe, JSON / YAML / CSV with syntax highlighting, and a per-item *plan + filename* manifest for background exporters; switching theme or color scheme re-renders the preview live. Per-export **footer text**, **right-to-left (Arabic / Hebrew)**, and **hide inline search** options apply across HTML themes.
-- **🎨 Themes + named color schemes** — every theme dir ships a thumbnail mock (renders Apple Color Emoji / Noto Color Emoji at native bitmap size); the wizard's color picker offers Catppuccin (Latte / Frappé / Macchiato / Mocha), Tokyo Night (Night / Storm / Moon / Day / Neon), and a per-theme "default" first option, each with full nine-role swatch rows (`bg / text / link / accent / secondary / muted / success / warning / danger`). Built-in themes: **basic** (clean dark), **ratatui** (terminal-TUI homage — monospace, ASCII box borders, sticky status bar), and **fun** (Comic-Sans, rainbow gradients, sticker emoji, ±0.4° tilted cards — perfect for kids).
-- **🌐 Tab-based web UI** — Search, Photos, Documents, Videos, Ask, Manage. Every result-bearing tab shares the same header layout (icon + title + live "N of M" count + **list / grid / table** view toggle, all on one line; mode persists per tab) and the same purple button style, so adding new tabs feels native. Each tab has its own scoped search and its own independent **Advanced** filter form (Sources chips + the **Top-N** sort below) — tweaking Photos doesn't touch Search.
-- **🔝 Top-N advanced filter** — pick a numeric / date / duration field (e.g. `last_sync`, `duration`, `github_stars`, `file_size`), choose **▲ Top** or **▼ Bottom**, set a count, and the tab shows that many items in sorted order. The autocomplete is **scoped per tab** — the Videos combo offers `view_count` / `duration`, Photos offers `image_width` / `iso`, Search offers everything — so no irrelevant fields get suggested. Each result also displays its sort-key value as a chip / column so you see *why* a row is where it is. Manage hosts inline doctor / status, general info, plugin admin, **🔄 Sync & Ingest** (run sync / ingest as background subprocess jobs with progress + log + exit status), background **✈️ Tasks** for exports, and a syntax-highlighted log viewer.
-- **🧩 Plugin-contributed tabs** — plugins can ship a `tab.js` + `tab.css` next to their Python and add a top-level tab to the UI through a stable `window.booki` host API.
-- **🚫 Proudly no-build** — the web UI is plain `index.html` + one `app.js` + one `styles.css`. No bundler, no transpiler, no `node_modules`. Edit the file, refresh the browser. Plugin tabs follow the same rule.
+- **🔌 Pluggable sources** — Chrome / Safari / Firefox bookmarks, YouTube, RSS, local directories. Write your own in ~30 lines.
+
+- **📝 One Markdown file per item** — frontmatter + body, editable by hand, friendly to Git and Obsidian.
+
+- **🧠 LLM enrichment** — auto-summary + keywords written back into each file, so search works on cryptic titles.
+
+- **🧬 Metadata enrichers** — per-URL classifiers promote items to richer kinds (`photo`, `video`, `channel`, `document`). Built-ins: GitHub, YouTube, photos, documents.
+
+- **🔎 Semantic search** — finds items by meaning, not keywords. Cross-language — English queries match Hebrew titles.
+
+- **🤖 LLM answers** — synthesizes an answer over the retrieved items.
+
+- **⚡ Terminal browser** — `booki browse`: fzf picker with live preview. Enter opens, `Ctrl-Y` copies, `Ctrl-E` edits the `.md`.
+
+- **🌐 Tab-based web UI** — Search / Photos / Videos / Documents / Ask / Manage. Consistent header, list / grid / table toggle, per-tab Advanced filter.
+
+- **🔝 Top-N advanced filter** — sort by any numeric / date / duration field. Field combo scoped per tab; sort-key value rendered on each result row.
+
+- **🪄 4-step export wizard** — *Exporter → Options → Organize → Preview*. Drag-and-drop tree, sandboxed live preview, per-export RTL / footer / search-toggle options.
+
+- **📤 Pluggable exporters** — themed HTML page, offline ZIP (full pages + PDFs + videos), data dumps (CSV / JSON / YAML / Markdown), photo galleries, Netscape bookmarks.
+
+- **🎨 Themes + color schemes** — `basic`, `ratatui`, `fun`. Catppuccin and Tokyo Night palettes baked in; per-theme thumbnail mocks.
+
+- **🖥️ Menubar sidecar** — Rust `booki-manager` runs sync / ingest on a schedule, with `[manager.sync]` flags in `config.toml`.
+
+- **🧩 Browser extension** (Chrome + Firefox) — side-panel picker (`Alt+Shift+B`) plus right-click "Add to Booki". See [`extra/extension/`](extra/extension/README.md).
+
+- **🔍 Alfred workflow** (macOS) — `bk <query>` from anywhere; Enter opens, ⌘+Enter copies. See [`extra/alfred/`](extra/alfred/README.md).
+
+- **🔗 Dead link detection** — flags broken bookmarks and suggests Wayback archives.
+
+- **🧩 Plugin tabs** — plugins ship `tab.js` + `tab.css` and add a top-level tab through a stable `window.booki` API.
+
+- **🚫 Proudly no-build** — plain `index.html` + one `app.js` + one `styles.css`. No bundler, no `node_modules`.
+
 - **🔒 Privacy-first** — defaults run fully locally with Ollama + local embeddings. Cloud LLMs are opt-in.
 
 ---
