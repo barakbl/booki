@@ -313,7 +313,6 @@ function renderItemsTable(host, items, opts = {}) {
   if (!items.length) { host.innerHTML = ""; return; }
   const rows = items.map(bm => {
     const kind = bm.kind || "bookmark";
-    const tags = (bm.tags || []).slice(0, 4).map(t => escapeHtml(t)).join(", ");
     const imp = bm.importance > 0 ? `★${bm.importance}` : "";
     const topCell = showTop
       ? `<td class="col-top">${escapeHtml(_formatTopValue(topFieldRaw(bm, adv.top.field), adv.top.field))}</td>`
@@ -328,14 +327,13 @@ function renderItemsTable(host, items, opts = {}) {
       <td class="col-kind">${escapeHtml(kind)}</td>
       <td class="col-imp">${imp}</td>
       ${topCell}
-      <td class="col-tags">${tags}</td>
     </tr>`;
   }).join("");
   const topHead = showTop ? `<th class="col-top-head">${escapeHtml(topLabel)}</th>` : "";
   host.innerHTML = `
     <table class="items-table">
       <thead>
-        <tr><th></th><th>Name</th><th>Source</th><th>Type</th><th>★</th>${topHead}<th>Tags</th></tr>
+        <tr><th></th><th>Name</th><th>Source</th><th>Type</th><th>★</th>${topHead}</tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>`;
