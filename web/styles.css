@@ -1917,6 +1917,22 @@ mark.hl {
   gap: 8px;
   margin-top: 4px;
 }
+/* Edit-bookmark modal Cancel / Save match the drawer + toggle buttons. */
+.form-actions .btn {
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.form-actions .btn.primary {
+  background: var(--accent-strong);
+  border: 1px solid var(--accent-strong);
+  color: #fff;
+}
+.form-actions .btn.primary:hover {
+  filter: brightness(1.1);
+  border-color: var(--accent-strong);
+}
 .edit-status {
   padding: 0 20px 16px;
   margin: 0;
