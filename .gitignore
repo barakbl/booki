@@ -2,6 +2,13 @@
 __pycache__/
 *.pyc
 *.local
+.pytest_cache/
+
+# macOS Finder metadata — never useful in a repo.
+.DS_Store
+
+# Rust build artifacts (booki-manager).
+target/
 
 # Generated data — remove these lines if you want to version your bookmarks
 downloads/

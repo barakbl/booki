@@ -54,14 +54,24 @@ function writeView(v) {
 
 booki.tabs.implement("documents", {
   mount(el) {
+    const cur = readView();
+    const btn = (id, glyph, label) => {
+      const on = id === cur;
+      return `<button type="button" class="view-btn${on ? " active" : ""}"
+                      data-view="${id}" title="${label} view"
+                      aria-pressed="${on ? "true" : "false"}">
+        <span class="view-glyph" aria-hidden="true">${glyph}</span>
+        <span class="view-label">${label}</span>
+      </button>`;
+    };
     el.innerHTML = `
       <div class="doc-tab scoped-tab">
         <header class="tab-header">
           <h2>📄 Documents</h2>
           <p class="tab-sub" id="docCount">—</p>
-          <div class="doc-view-toggle" role="group" aria-label="View mode">
-            <button type="button" class="doc-view-btn" data-view="list" title="List view">≡ List</button>
-            <button type="button" class="doc-view-btn" data-view="grid" title="Grid view">▦ Grid</button>
+          <div class="view-toggle" role="group" aria-label="View mode">
+            ${btn("list", "≡", "List")}
+            ${btn("grid", "▦", "Grid")}
           </div>
         </header>
         <div class="search-box scoped-search" id="docSearchBox">
@@ -71,6 +81,7 @@ booki.tabs.implement("documents", {
                  placeholder="Search documents by title or URL…">
           <span class="hint">↵ open · click for details</span>
         </div>
+        <div class="adv-host" id="docAdvHost"></div>
         <div id="docResults"></div>
         <p class="tab-empty hidden" id="docEmpty">
           No documents yet — the document enricher tags items by URL extension.<br>
@@ -99,12 +110,22 @@ booki.tabs.implement("documents", {
         }
       });
 
-    el.querySelectorAll(".doc-view-btn").forEach(btn => {
-      btn.addEventListener("click", () => {
-        writeView(btn.dataset.view);
+    el.querySelectorAll(".view-toggle .view-btn").forEach(b => {
+      b.addEventListener("click", () => {
+        writeView(b.dataset.view);
         render(el);
       });
     });
+
+    const advHost = el.querySelector("#docAdvHost");
+    if (advHost && booki.adv?.mountInto) {
+      booki.adv.mountInto(advHost, { scope: "document" });
+      // Re-render only when our own scope changes — other tabs' filters
+      // don't affect this view.
+      booki.adv.onChange((_adv, scope) => {
+        if (scope === "document") render(el);
+      });
+    }
   },
   onShow(el) {
     render(el);
@@ -129,13 +150,17 @@ function render(el) {
   const input   = el.querySelector("#docFindInput");
   const view    = readView();
 
-  el.querySelectorAll(".doc-view-btn").forEach(b => {
-    b.classList.toggle("active", b.dataset.view === view);
+  el.querySelectorAll(".view-toggle .view-btn").forEach(b => {
+    const on = b.dataset.view === view;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
   });
 
-  const all = booki.bookmarks.all().filter(isDocument);
+  const advPred = booki.adv?.predicate?.("document") || (() => true);
+  const all = booki.bookmarks.all().filter(isDocument).filter(advPred);
+  const fullCount = booki.bookmarks.all().filter(isDocument).length;
 
-  if (!all.length) {
+  if (!fullCount) {
     host.innerHTML = "";
     count.textContent = "0 documents";
     empty.classList.remove("hidden");
@@ -144,6 +169,7 @@ function render(el) {
   }
   empty.classList.add("hidden");
 
+  const topSorts = !!booki.adv?.hasTopSort?.("document");
   const q = (input.value || "").trim();
   let scored;
   if (q) {
@@ -164,16 +190,25 @@ function render(el) {
         urlMatches:   um ? um.matches : [],
       });
     }
-    scored.sort((a, b) => b.score - a.score);
+    if (topSorts) {
+      const byId = new Map(scored.map(r => [r.bm.id, r]));
+      const ordered = booki.adv.applySort(scored.map(r => r.bm), "document");
+      scored = ordered.map(b => byId.get(b.id)).filter(Boolean);
+    } else {
+      scored.sort((a, b) => b.score - a.score);
+    }
+  } else if (topSorts) {
+    scored = booki.adv.applySort(all, "document")
+      .map(b => ({ bm: b, score: 0, titleMatches: [], urlMatches: [] }));
   } else {
     scored = [...all]
       .sort((a, b) => (b.importance || 0) - (a.importance || 0))
       .map(b => ({ bm: b, score: 0, titleMatches: [], urlMatches: [] }));
   }
 
-  count.textContent = q
-    ? `${scored.length} of ${all.length} documents`
-    : (all.length === 1 ? "1 document" : `${all.length} documents`);
+  count.textContent = (q || all.length !== fullCount)
+    ? `${scored.length} of ${fullCount} documents`
+    : (fullCount === 1 ? "1 document" : `${fullCount} documents`);
 
   if (!scored.length) {
     host.innerHTML = "";
@@ -182,7 +217,8 @@ function render(el) {
   }
   noMatch.classList.add("hidden");
 
-  const rows = scored.slice(0, 200);
+  // Top-sort already enforces its own count limit; skip the cap then.
+  const rows = topSorts ? scored : scored.slice(0, 200);
   host.innerHTML = view === "grid"
     ? renderGrid(rows)
     : renderList(rows);
@@ -206,6 +242,7 @@ function render(el) {
 
 function renderList(rows) {
   const esc = booki.ui.escapeHtml, hl = booki.ui.highlight;
+  const topChipFor = (bm) => booki.adv?.topChip?.(bm, "document") || "";
   const items = rows.map(({ bm, titleMatches, urlMatches }) => {
     const type = docType(bm);
     const icon = iconFor(bm);
@@ -217,6 +254,7 @@ function renderList(rows) {
           <div class="doc-row-url">${hl(bm.url || "", urlMatches)}</div>
         </div>
         <div class="doc-row-meta">
+          ${topChipFor(bm)}
           ${type ? `<span class="doc-type-chip">${esc(type)}</span>` : ""}
           ${bm.importance ? `<span class="doc-imp">★${bm.importance}</span>` : ""}
         </div>
@@ -234,10 +272,12 @@ function truncate(s, n) {
 
 function renderGrid(rows) {
   const esc = booki.ui.escapeHtml;
+  const topChipFor = (bm) => booki.adv?.topChip?.(bm, "document") || "";
   const tiles = rows.map(({ bm }) => {
     const type    = docType(bm);
     const icon    = iconFor(bm);
     const summary = truncate(bm.summary, SUMMARY_MAX);
+    const top     = topChipFor(bm);
     return `
       <li class="doc-tile" tabindex="0" data-id="${esc(bm.id)}">
         <div class="doc-tile-thumb"><span class="doc-tile-icon">${icon}</span></div>
@@ -249,6 +289,7 @@ function renderGrid(rows) {
           <div class="doc-tile-sub">
             ${type ? `<span class="doc-type-chip">${esc(type)}</span>` : ""}
             ${bm.importance ? `<span class="doc-imp">★${bm.importance}</span>` : ""}
+            ${top}
           </div>
         </div>
       </li>`;

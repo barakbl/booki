@@ -8,31 +8,8 @@
 }
 .doc-tab .tab-header { position: relative; }
 
-.doc-view-toggle {
-  display: inline-flex;
-  margin-left: auto;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 3px;
-  gap: 2px;
-}
-.doc-view-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-dim);
-  padding: 4px 12px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s;
-}
-.doc-view-btn:hover { color: var(--text); }
-.doc-view-btn.active {
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  color: white;
-}
+/* The Documents tab uses the host's standard `.view-toggle` markup +
+   styles for visual parity with Photos / Videos / Search. */
 
 /* List view — fzf-style row. */
 .doc-list {

@@ -37,7 +37,9 @@ html, body {
   margin-top: 18px; padding-top: 10px; text-align: center;
   color: var(--dim); font-size: 12px; border-top: 1px dashed var(--border);
 }
-[dir="rtl"] body { text-align: right; }
+[dir="rtl"] .tile-title,
+[dir="rtl"] .lightbox-title { unicode-bidi: plaintext; }
+[dir="rtl"] .tile-num { direction: ltr; unicode-bidi: isolate; }
 
 .tui-input {
   display: flex; align-items: center; gap: 8px;

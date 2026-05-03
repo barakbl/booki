@@ -25,10 +25,51 @@ Booki pulls items from **pluggable sources** — Chrome / Safari / Firefox bookm
 - **📤 Pluggable exporters** — turn a selection into a themed HTML page, an offline ZIP (full pages + PDFs + downloaded videos via `offline_archive`), a CSV / JSON / YAML / Markdown data dump, a themed photo gallery, or a browser-importable Netscape bookmarks file (`bookmark_file`).
 - **🪄 4-step export wizard** — *Exporter → Options → Organize → Preview*, mounted inline at the top of the active tab (and hides the underlying results while it's open so the wizard is the focus). The **Organize** step is a drag-and-drop tree builder with auto-grouping (by tag / kind / source / list / browser folder / importance) and folder rename / delete; forgiving drop targets (gaps inflate during drag, top/bottom of each row act as insert-before/after, folder middle = drop into); hierarchy-aware exporters (`bookmark_file`, `data`) emit nested folders, flat exporters honor the manual order. The **Preview** step renders HTML in a sandboxed iframe, JSON / YAML / CSV with syntax highlighting, and a per-item *plan + filename* manifest for background exporters; switching theme or color scheme re-renders the preview live. Per-export **footer text**, **right-to-left (Arabic / Hebrew)**, and **hide inline search** options apply across HTML themes.
 - **🎨 Themes + named color schemes** — every theme dir ships a thumbnail mock (renders Apple Color Emoji / Noto Color Emoji at native bitmap size); the wizard's color picker offers Catppuccin (Latte / Frappé / Macchiato / Mocha), Tokyo Night (Night / Storm / Moon / Day / Neon), and a per-theme "default" first option, each with full nine-role swatch rows (`bg / text / link / accent / secondary / muted / success / warning / danger`). Built-in themes: **basic** (clean dark), **ratatui** (terminal-TUI homage — monospace, ASCII box borders, sticky status bar), and **fun** (Comic-Sans, rainbow gradients, sticker emoji, ±0.4° tilted cards — perfect for kids).
-- **🌐 Tab-based web UI** — Search, Photos, Documents, Videos, Ask, Manage. Each result-bearing tab has a **list / grid / table** view toggle in its header (state persists per tab). Each tab has its own scoped search; Documents toggles between list and grid; Manage hosts inline doctor / status, general info, plugin admin, **🔄 Sync & Ingest** (run sync / ingest as background subprocess jobs with progress + log + exit status), background **✈️ Tasks** for exports, and a syntax-highlighted log viewer.
+- **🌐 Tab-based web UI** — Search, Photos, Documents, Videos, Ask, Manage. Every result-bearing tab shares the same header layout (icon + title + live "N of M" count + **list / grid / table** view toggle, all on one line; mode persists per tab) and the same purple button style, so adding new tabs feels native. Each tab has its own scoped search and its own independent **Advanced** filter form (Sources chips + the **Top-N** sort below) — tweaking Photos doesn't touch Search.
+- **🔝 Top-N advanced filter** — pick a numeric / date / duration field (e.g. `last_sync`, `duration`, `github_stars`, `file_size`), choose **▲ Top** or **▼ Bottom**, set a count, and the tab shows that many items in sorted order. The autocomplete is **scoped per tab** — the Videos combo offers `view_count` / `duration`, Photos offers `image_width` / `iso`, Search offers everything — so no irrelevant fields get suggested. Each result also displays its sort-key value as a chip / column so you see *why* a row is where it is. Manage hosts inline doctor / status, general info, plugin admin, **🔄 Sync & Ingest** (run sync / ingest as background subprocess jobs with progress + log + exit status), background **✈️ Tasks** for exports, and a syntax-highlighted log viewer.
 - **🧩 Plugin-contributed tabs** — plugins can ship a `tab.js` + `tab.css` next to their Python and add a top-level tab to the UI through a stable `window.booki` host API.
 - **🚫 Proudly no-build** — the web UI is plain `index.html` + one `app.js` + one `styles.css`. No bundler, no transpiler, no `node_modules`. Edit the file, refresh the browser. Plugin tabs follow the same rule.
 - **🔒 Privacy-first** — defaults run fully locally with Ollama + local embeddings. Cloud LLMs are opt-in.
+
+---
+
+## 📸 Screenshots
+
+A quick visual tour. Captions match the filenames in [`docs/screen/`](docs/screen/) — open any image to see it full-size.
+
+**Web UI**
+
+**web search**
+
+![web search](docs/screen/web%20search.gif)
+
+**web doctor**
+
+![web doctor](docs/screen/web%20doctor.png)
+
+**injest and sync web ui**
+
+![injest and sync web ui](docs/screen/injest%20and%20sync%20web%20ui.png)
+
+**export wizard**
+
+![export wizard](docs/screen/export%20wizard.png)
+
+**CLI**
+
+**browse in cli**
+
+![browse in cli](docs/screen/browse%20in%20cli.png)
+
+**autocomplete in cli**
+
+![autocomplete in cli](docs/screen/autocomplete%20in%20cli.gif)
+
+**Manager (menubar sidecar)**
+
+**manager tray app**
+
+![manager tray app](docs/screen/manager%20tray%20app.png)
 
 ---
 
@@ -107,6 +148,62 @@ source /path/to/booki/shells/booki.zsh
 ```
 
 After sourcing, drop the leading `./` — `booki sync`, `booki chat "..."`, etc.
+
+---
+
+## 🖥️ booki-manager (menubar sidecar)
+
+A small, native macOS / Linux menubar app written in Rust. It lives next to your clock, watches the browser bookmark files for changes, and runs `booki sync` / `booki ingest` on a schedule so you never have to remember to. From the tray menu you can also trigger **Sync now** / **Ingest now**, open the web UI, and toggle autostart.
+
+```bash
+cd tools/booki-manager
+cargo run --release           # foreground — useful while configuring
+cargo build --release         # binary lands at target/release/booki-manager
+```
+
+Configuration lives in the same `config.toml` as the rest of Booki, under `[manager.*]`:
+
+```toml
+# When to run the periodic jobs.
+[manager.schedule.sync]
+cadence = "daily"             # off | daily | weekly
+window  = "02:00-05:00"       # local time; wraps over midnight if end ≤ start
+
+[manager.schedule.ingest]
+cadence = "weekly"
+window  = "03:00-05:00"
+
+# What flags the manager appends to every `booki sync` it triggers — the
+# manual "Sync now" *and* the scheduled syncs above. Both default to true,
+# so out of the box your schedule keeps summaries + plugin enrichers fresh.
+[manager.sync]
+enrich      = true            # adds --enrich      (LLM summary + keywords)
+enrich-meta = true            # adds --enrich-meta (github / photo / document …)
+```
+
+Either `enrich-meta` (CLI-flag spelling) or `enrich_meta` (TOML-idiomatic) works — there's a serde alias so you can pick whichever reads cleaner to you.
+
+A job runs when **both** (a) at least one cadence period has elapsed since its last successful run *and* (b) we're inside `window` now, OR the window already ended today (catch-up — covers laptops that slept through 02:00).
+
+---
+
+## 🧪 Tests
+
+```bash
+pip install pytest                     # one-time, dev-only
+python -m pytest                       # ~1.5s, hermetic
+```
+
+The Python suite lives under [`tests/`](tests/) and covers the bits that hurt most when broken: the bookmark file parser + URL-hash id (`test_ingest.py`), the `ItemStore` write / update / removed-flag roundtrip (`test_store.py`), every key FastAPI route via `TestClient` against a real `create_app()` (`test_web.py`), and the `booki` CLI dispatcher as a real subprocess (`test_cli.py`). All fixtures are `tmp_path`-scoped — no test touches your real `bookmarks/` or `config.toml`.
+
+The Rust manager has its own suite under `tools/booki-manager/`:
+
+```bash
+cd tools/booki-manager
+cargo test
+```
+
+It includes config-parsing tests for `[manager.sync]` (defaults, dash/underscore alias, partial overrides) and a smoke test that loads the project's real `config.toml` to confirm the parser still agrees with the example.
 
 ---
 

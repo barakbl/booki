@@ -98,7 +98,12 @@ input.filter:focus { border-color: var(--accent); }
 .item-summary {
   margin-top: 5px;
   color: color-mix(in srgb, var(--text) 78%, transparent);
+  /* Each summary picks its own direction from its content, so an
+     English sentence in an RTL page keeps its period at the end of
+     the line instead of being yanked to the visual left edge. */
+  unicode-bidi: plaintext;
 }
+.item-imp, .item-source { unicode-bidi: isolate; }
 .tags {
   margin-top: 6px;
   display: flex;
@@ -111,7 +116,14 @@ input.filter:focus { border-color: var(--accent); }
   border-radius: 999px;
   background: color-mix(in srgb, var(--secondary) 14%, transparent);
   color: var(--secondary);
+  /* The "#" prefix is rendered inside the chip; force LTR so it always
+     anchors to the start (left), regardless of the page or tag-text
+     direction. RTL tag content (Hebrew / Arabic) still renders RTL
+     inside the chip — the bidi algorithm treats it as its own run. */
+  direction: ltr;
+  unicode-bidi: isolate;
 }
+.tag::before { content: "#"; opacity: 0.65; margin-inline-end: 1px; }
 .empty {
   color: var(--muted);
   margin-top: 20px;
@@ -124,14 +136,27 @@ input.filter:focus { border-color: var(--accent); }
   font-size: 12px;
   text-align: center;
 }
-[dir="rtl"] body { text-align: right; }
-[dir="rtl"] .item-head, [dir="rtl"] .tags { flex-direction: row-reverse; }
+
+/* ─── RTL adjustments ─────────────────────────────────────────────── */
+/* `dir="rtl"` on <html> already mirrors flexbox / text-align / inputs.
+   - URLs and the meta line stay LTR via <bdi> in the template (URL
+     strings would otherwise split around `:` and `/`).
+   - Tag chips force LTR + isolate so the leading "#" stays at the
+     start of each chip regardless of page direction.
+   - Summaries use `unicode-bidi: plaintext` so each one's direction
+     follows its content. An English summary in an RTL page keeps
+     its period at the visual end of the sentence rather than being
+     yanked to the line's left edge by the surrounding RTL paragraph
+     direction. The downside (English summaries now left-align in an
+     RTL page) is the lesser evil — broken punctuation is uglier
+     than a paragraph that aligns with its own writing direction. */
+[dir="rtl"] .group-name { letter-spacing: 0; }
 </style>
 </head>
 <body>
 <main class="wrap">
   <h1>{{ title }}</h1>
-  <p class="meta">{{ item_count }} item{% if item_count != 1 %}s{% endif %} · generated {{ generated_at }}</p>
+  <p class="meta"><bdi>{{ item_count }} item{% if item_count != 1 %}s{% endif %} · generated {{ generated_at }}</bdi></p>
   {% if show_search %}<input class="filter" type="search" id="filter" placeholder="Filter… (title, URL, tag, summary)">{% endif %}
   <div id="results">
 {%- for g in groups %}
@@ -144,13 +169,13 @@ input.filter:focus { border-color: var(--accent); }
         <li class="item" data-search="{{ ((it.title or '') ~ ' ' ~ (it.url or '') ~ ' ' ~ ((it.tags or [])|join(' ')) ~ ' ' ~ (it.summary or ''))|lower }}">
           <div class="item-head">
             <span class="item-glyph">{{ it.kind|glyph }}</span>
-            <a class="item-title" href="{{ it.url }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
-            {% if it.importance %}<span class="item-imp">★{{ it.importance }}</span>{% endif %}
-            {% if it.source %}<span class="item-source">{{ it.source }}</span>{% endif %}
+            <a class="item-title" href="{{ it.url }}" target="_blank" rel="noopener"><bdi>{{ it.title or '(untitled)' }}</bdi></a>
+            {% if it.importance %}<span class="item-imp"><bdi>★{{ it.importance }}</bdi></span>{% endif %}
+            {% if it.source %}<span class="item-source"><bdi>{{ it.source }}</bdi></span>{% endif %}
           </div>
-          <div class="item-url">{{ it.url }}</div>
+          <div class="item-url"><bdi>{{ it.url }}</bdi></div>
           {% if it.summary %}<div class="item-summary">{{ it.summary }}</div>{% endif %}
-          {% if it.tags %}<div class="tags">{% for t in it.tags %}<span class="tag">#{{ t }}</span>{% endfor %}</div>{% endif %}
+          {% if it.tags %}<div class="tags">{% for t in it.tags %}<span class="tag"><bdi>{{ t }}</bdi></span>{% endfor %}</div>{% endif %}
         </li>
 {%- endfor %}
       </ul>

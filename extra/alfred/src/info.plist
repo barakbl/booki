@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>bundleid</key>
+	<string>dev.booki.alfred</string>
+	<key>category</key>
+	<string>Tools</string>
+	<key>connections</key>
+	<dict>
+		<key>A1A1A1A1-0001-4000-8000-000000000001</key>
+		<array>
+			<dict>
+				<key>destinationuid</key>
+				<string>A1A1A1A1-0001-4000-8000-000000000002</string>
+				<key>modifiers</key>
+				<integer>0</integer>
+				<key>modifiersubtext</key>
+				<string></string>
+				<key>vitoclose</key>
+				<false/>
+			</dict>
+			<dict>
+				<key>destinationuid</key>
+				<string>A1A1A1A1-0001-4000-8000-000000000003</string>
+				<key>modifiers</key>
+				<integer>1048576</integer>
+				<key>modifiersubtext</key>
+				<string>Copy URL</string>
+				<key>vitoclose</key>
+				<false/>
+			</dict>
+		</array>
+	</dict>
+	<key>createdby</key>
+	<string>Booki</string>
+	<key>description</key>
+	<string>Search your local Booki bookmarks. Type `bk` then a query, hit Enter to open in your browser, ⌘+Enter to copy the URL.</string>
+	<key>disabled</key>
+	<false/>
+	<key>name</key>
+	<string>Booki</string>
+	<key>objects</key>
+	<array>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>alfredfiltersresults</key>
+				<false/>
+				<key>alfredfiltersresultsmatchmode</key>
+				<integer>0</integer>
+				<key>argumenttreatemptyqueryasnil</key>
+				<false/>
+				<key>argumenttrimmode</key>
+				<integer>0</integer>
+				<key>argumenttype</key>
+				<integer>1</integer>
+				<key>escaping</key>
+				<integer>102</integer>
+				<key>keyword</key>
+				<string>bk</string>
+				<key>queuedelaycustom</key>
+				<integer>3</integer>
+				<key>queuedelayimmediatelyinitially</key>
+				<true/>
+				<key>queuedelaymode</key>
+				<integer>0</integer>
+				<key>queuemode</key>
+				<integer>1</integer>
+				<key>runningsubtext</key>
+				<string>Searching Booki…</string>
+				<key>script</key>
+				<string>./search.py "$1"</string>
+				<key>scriptargtype</key>
+				<integer>1</integer>
+				<key>scriptfile</key>
+				<string></string>
+				<key>subtext</key>
+				<string>Search your Booki bookmarks</string>
+				<key>title</key>
+				<string>Booki: search bookmarks</string>
+				<key>type</key>
+				<integer>0</integer>
+				<key>withspace</key>
+				<true/>
+			</dict>
+			<key>type</key>
+			<string>alfred.workflow.input.scriptfilter</string>
+			<key>uid</key>
+			<string>A1A1A1A1-0001-4000-8000-000000000001</string>
+			<key>version</key>
+			<integer>3</integer>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>browser</key>
+				<string></string>
+				<key>spaces</key>
+				<string></string>
+				<key>url</key>
+				<string>{query}</string>
+				<key>utf8</key>
+				<true/>
+			</dict>
+			<key>type</key>
+			<string>alfred.workflow.action.openurl</string>
+			<key>uid</key>
+			<string>A1A1A1A1-0001-4000-8000-000000000002</string>
+			<key>version</key>
+			<integer>1</integer>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>autopaste</key>
+				<false/>
+				<key>clipboardtext</key>
+				<string>{query}</string>
+				<key>ignoredynamicplaceholders</key>
+				<false/>
+				<key>transient</key>
+				<false/>
+			</dict>
+			<key>type</key>
+			<string>alfred.workflow.output.clipboard</string>
+			<key>uid</key>
+			<string>A1A1A1A1-0001-4000-8000-000000000003</string>
+			<key>version</key>
+			<integer>3</integer>
+		</dict>
+	</array>
+	<key>readme</key>
+	<string>📚 Booki — Alfred workflow
+
+Search your local Booki bookmarks from Alfred.
+
+Usage:
+  bk &lt;query&gt;     fuzzy-search bookmarks
+  ↵              open in default browser
+  ⌘ + ↵          copy URL to clipboard
+
+Configuration (Workflow Environment Variables):
+  booki_host    default http://127.0.0.1:8765
+  booki_kinds   comma-separated kind filter — empty = all
+                e.g. "bookmark", "bookmark,video"
+
+Booki must be running locally (`./booki web`).</string>
+	<key>uidata</key>
+	<dict>
+		<key>A1A1A1A1-0001-4000-8000-000000000001</key>
+		<dict>
+			<key>xpos</key>
+			<integer>40</integer>
+			<key>ypos</key>
+			<integer>40</integer>
+		</dict>
+		<key>A1A1A1A1-0001-4000-8000-000000000002</key>
+		<dict>
+			<key>xpos</key>
+			<integer>280</integer>
+			<key>ypos</key>
+			<integer>40</integer>
+		</dict>
+		<key>A1A1A1A1-0001-4000-8000-000000000003</key>
+		<dict>
+			<key>xpos</key>
+			<integer>280</integer>
+			<key>ypos</key>
+			<integer>180</integer>
+		</dict>
+	</dict>
+	<key>variables</key>
+	<dict>
+		<key>booki_host</key>
+		<string>http://127.0.0.1:8765</string>
+		<key>booki_kinds</key>
+		<string></string>
+	</dict>
+	<key>variablesdontexport</key>
+	<array/>
+	<key>version</key>
+	<string>0.1.0</string>
+	<key>webaddress</key>
+	<string>https://github.com/barakbl/booki</string>
+</dict>
+</plist>

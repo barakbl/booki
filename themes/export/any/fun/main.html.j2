@@ -140,7 +140,12 @@ input.filter:focus {
 .item-url {
   color: var(--muted); font-size: 12px; word-break: break-all; margin-top: 4px;
 }
-.item-summary { margin-top: 6px; font-size: 14px; }
+.item-summary {
+  margin-top: 6px; font-size: 14px;
+  /* Per-item paragraph direction (see RTL note below). */
+  unicode-bidi: plaintext;
+}
+.item-imp, .item-source { unicode-bidi: isolate; }
 .tags { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
 .tag {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
@@ -148,7 +153,11 @@ input.filter:focus {
   font-size: 12px; font-weight: 700;
   padding: 3px 12px; border-radius: 999px;
   border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  /* Pin "#" to the start of the chip in any direction. */
+  direction: ltr;
+  unicode-bidi: isolate;
 }
+.tag::before { content: "#"; opacity: 0.7; margin-inline-end: 1px; }
 
 .empty {
   text-align: center; color: var(--muted);
@@ -171,8 +180,20 @@ input.filter:focus {
 .page-footer::before { content: "🌈 "; }
 .page-footer::after  { content: " 🌈"; }
 
-[dir="rtl"] body { text-align: right; }
-[dir="rtl"] .item-head, [dir="rtl"] .tags { flex-direction: row-reverse; }
+/* RTL: dir="rtl" mirrors flexbox + text-align + inputs natively.
+   - URL + meta counters wrap in <bdi> in the template to keep LTR
+     shape inside an RTL paragraph.
+   - Title / importance / source wrap in <bdi> so each is its own
+     bidi run and a Hebrew title doesn't drag a neighboring "★5" or
+     "YouTube" badge into the wrong slot.
+   - .item-summary uses unicode-bidi:plaintext so an English summary
+     in an RTL page keeps its trailing period at the line end (not
+     yanked to the visual left edge). Trade-off: those summaries
+     left-align in an otherwise-RTL page, which is fine.
+   - The decorative ±0.4° tilts look weirder mirrored — flip the
+     sign so the visual rhythm matches the writing direction. */
+[dir="rtl"] .item:nth-child(odd)  { transform: rotate( 0.4deg); }
+[dir="rtl"] .item:nth-child(even) { transform: rotate(-0.4deg); }
 
 @media (prefers-reduced-motion: reduce) {
   .fun-title, .fun-meta .sticker, .group-name, .item { animation: none !important; }
@@ -184,8 +205,8 @@ input.filter:focus {
 <main class="wrap">
   <h1 class="fun-title"><span class="star">🌟</span> {{ title }} <span class="star">🌟</span></h1>
   <p class="fun-meta">
-    <span class="sticker">🎈</span> {{ item_count }} item{% if item_count != 1 %}s{% endif %}
-    <span class="sticker">🦄</span> generated {{ generated_at }}
+    <bdi><span class="sticker">🎈</span> {{ item_count }} item{% if item_count != 1 %}s{% endif %}</bdi>
+    <bdi><span class="sticker">🦄</span> generated {{ generated_at }}</bdi>
   </p>
   {% if show_search %}<input class="filter" type="search" id="filter" placeholder="🔍 type to find…">{% endif %}
   <div id="results">
@@ -199,13 +220,13 @@ input.filter:focus {
         <li class="item" data-search="{{ ((it.title or '') ~ ' ' ~ (it.url or '') ~ ' ' ~ ((it.tags or [])|join(' ')) ~ ' ' ~ (it.summary or ''))|lower }}">
           <div class="item-head">
             <span class="item-glyph">{{ it.kind|glyph }}</span>
-            <a class="item-title" href="{{ it.url }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
-            {% if it.importance %}<span class="item-imp">★ {{ it.importance }}</span>{% endif %}
-            {% if it.source %}<span class="item-source">{{ it.source }}</span>{% endif %}
+            <a class="item-title" href="{{ it.url }}" target="_blank" rel="noopener"><bdi>{{ it.title or '(untitled)' }}</bdi></a>
+            {% if it.importance %}<span class="item-imp"><bdi>★ {{ it.importance }}</bdi></span>{% endif %}
+            {% if it.source %}<span class="item-source"><bdi>{{ it.source }}</bdi></span>{% endif %}
           </div>
-          <div class="item-url">{{ it.url }}</div>
+          <div class="item-url"><bdi>{{ it.url }}</bdi></div>
           {% if it.summary %}<div class="item-summary">{{ it.summary }}</div>{% endif %}
-          {% if it.tags %}<div class="tags">{% for t in it.tags %}<span class="tag">#{{ t }}</span>{% endfor %}</div>{% endif %}
+          {% if it.tags %}<div class="tags">{% for t in it.tags %}<span class="tag"><bdi>{{ t }}</bdi></span>{% endfor %}</div>{% endif %}
         </li>
 {%- endfor %}
       </ul>

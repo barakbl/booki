@@ -286,3 +286,31 @@ timeout = 30
 # types         = ["pdf", "docx", "epub", "md"]
 # cooldown_days = 30
 # disabled      = true
+
+
+# ─── booki-manager (menubar sidecar) ────────────────────────────────────────
+# Read by the Rust `booki-manager` app. The Python CLI ignores this section.
+# Each job runs when both:
+#   (a) at least one cadence-period has elapsed since the last successful run
+#   (b) we're inside `window` now, OR the window already ended today
+#       (catch-up — covers the case where the machine slept through it)
+#
+# Fields:
+#   cadence : "off" | "daily" | "weekly"
+#   window  : "HH:MM-HH:MM" in local time. Optional; omit for "anytime".
+#             Wraps over midnight if end ≤ start (e.g. "22:00-04:00").
+
+# [manager.schedule.sync]
+# cadence = "daily"
+# window  = "02:00-05:00"
+
+# [manager.schedule.ingest]
+# cadence = "weekly"
+# window  = "03:00-05:00"
+
+# Flags the manager appends to every `booki sync` it triggers (manual
+# "Sync now" + the scheduled syncs above). Both default to true — turn
+# either off if you'd rather run enrichment manually from the CLI.
+# [manager.sync]
+# enrich      = true   # adds --enrich      (LLM summary + keywords)
+# enrich-meta = true   # adds --enrich-meta (plugin enrichers: github, photo, …)

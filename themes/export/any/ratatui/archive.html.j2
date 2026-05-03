@@ -98,8 +98,9 @@ html, body {
   margin-top: 16px; padding-top: 10px; text-align: center;
   color: var(--dim); font-size: 12px; border-top: 1px dashed var(--border);
 }
-[dir="rtl"] body { text-align: right; }
-[dir="rtl"] .tui-row { direction: rtl; }
+/* RTL: URL stays LTR via <bdi> in the template; numeric column too. */
+[dir="rtl"] .tui-row-num,
+[dir="rtl"] .tui-kind { direction: ltr; unicode-bidi: isolate; }
 .tui-skipped ul { margin: 0; padding-left: 18px; }
 </style>
 </head>
@@ -128,7 +129,7 @@ html, body {
               <a class="tui-link local" href="./files/{{ it.filename }}" target="_blank" rel="noopener">[ offline ]</a>
               {% if it.url %}<a class="tui-link ext" href="{{ it.url }}" target="_blank" rel="noopener noreferrer">[ original ↗ ]</a>{% endif %}
             </div>
-            <div class="tui-row-meta">{{ it.url }}</div>
+            <div class="tui-row-meta"><bdi>{{ it.url }}</bdi></div>
             {% if it.extra_files %}
             <div class="tui-row-extras">
               {%- for f in it.extra_files %}<a href="./files/{{ f }}" target="_blank" rel="noopener">📎 {{ f }}</a>{% endfor %}

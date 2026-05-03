@@ -1,0 +1,107 @@
+use crate::api::Client;
+use anyhow::{anyhow, Context, Result};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// Manages the lifecycle of `python -m booki web` (well, `./booki web` since
+/// Booki ships an executable script, not a module). We own the process: spawn
+/// on launch, SIGTERM on quit.
+pub struct ServerProc {
+    pub root: PathBuf,
+    pub child: Option<Child>,
+}
+
+impl ServerProc {
+    pub fn new(root: PathBuf) -> Self {
+        Self { root, child: None }
+    }
+
+    pub fn is_running(&mut self) -> bool {
+        match self.child.as_mut() {
+            Some(c) => c.try_wait().ok().flatten().is_none(),
+            None => false,
+        }
+    }
+
+    /// Spawn the server. Idempotent — if our child is alive, no-op. If
+    /// something else is already listening on the port (separate user-run
+    /// `booki web`), we skip spawning and adopt that.
+    pub fn ensure_running(&mut self, client: &Client) -> Result<()> {
+        if self.is_running() { return Ok(()); }
+        if client.health() {
+            log::info!("server already up; not spawning");
+            return Ok(());
+        }
+
+        let booki = self.booki_executable()?;
+        log::info!("spawning {} web", booki.display());
+        let child = Command::new(&booki)
+            .arg("web")
+            .current_dir(&self.root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .spawn()
+            .with_context(|| format!("spawn {}", booki.display()))?;
+        self.child = Some(child);
+
+        // Wait up to ~10s for /api/health to come up.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if client.health() { return Ok(()); }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        Err(anyhow!("server did not become healthy in time"))
+    }
+
+    pub fn shutdown(&mut self) {
+        if let Some(mut c) = self.child.take() {
+            // Give it a chance to exit cleanly. On Unix this is SIGKILL via
+            // std::process::Child::kill — uvicorn will tear down on receipt.
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+
+    fn booki_executable(&self) -> Result<PathBuf> {
+        // The repo ships an executable script named `booki` at the root.
+        let p = self.root.join("booki");
+        if !p.exists() {
+            return Err(anyhow!("booki entrypoint not found at {}", p.display()));
+        }
+        Ok(p)
+    }
+}
+
+impl Drop for ServerProc {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+#[allow(dead_code)]
+pub fn url_in_browser(url: &str) -> Result<()> {
+    open_url(url)
+}
+
+#[cfg(target_os = "macos")]
+fn open_url(url: &str) -> Result<()> {
+    Command::new("open").arg(url).spawn()?;
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn open_url(url: &str) -> Result<()> {
+    Command::new("xdg-open").arg(url).spawn()?;
+    Ok(())
+}
+#[cfg(target_os = "windows")]
+fn open_url(url: &str) -> Result<()> {
+    Command::new("cmd").args(["/C", "start", "", url]).spawn()?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub fn touch_path_string(p: &Path) -> String {
+    p.display().to_string()
+}

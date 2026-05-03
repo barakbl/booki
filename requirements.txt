@@ -35,3 +35,8 @@ pyyaml>=6.0
 # falls back to plain HTTP fetches for HTML pages (JS-rendered sites
 # won't look right). After install: `playwright install chromium` (~300MB).
 # playwright>=1.45.0
+
+# tests/ — only needed for `pytest`. Install with `pip install pytest`
+# or `pip install -r requirements.txt -r requirements-dev.txt` if you
+# split them out. The TestClient used by tests ships with `fastapi`.
+# pytest>=8.0

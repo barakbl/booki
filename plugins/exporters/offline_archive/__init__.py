@@ -118,10 +118,10 @@ def _classify(item: dict) -> tuple[str, str]:
 @register_exporter
 class OfflineArchiveExporter(Exporter):
     slug = "offline_archive"
-    name = "Offline archive"
+    name = "📥 Offline bundle (Flight mode)"
     description = (
         "Download whole pages (HTML / PDF / video / image) and bundle them "
-        "into a single zip with a themed index.html."
+        "into a single zip with a themed index.html — great for vacations 🏖️."
     )
     applicable_kinds = ["any"]
     execution_mode = "background"
@@ -180,31 +180,69 @@ class OfflineArchiveExporter(Exporter):
         return notes
 
     def preview(self, items, options, theme, theme_vars, tree=None):
-        manifest: list[dict] = []
-        used: set[str] = set()
+        # Render the *same* archive.html.j2 the runner will use, but with
+        # planned filenames instead of actual downloaded files. Links in
+        # the preview point at `./files/<slug>.<ext>` which won't resolve
+        # (no zip yet), but the layout, theme, and per-item plan badges
+        # are exactly what the user will see in the bundle.
+        if theme is None:
+            return {"kind": "manifest", "manifest": []}
+
         cap = 50
         shown = items[:cap]
+        used: set[str] = set()
+        rendered: list[dict] = []
         for it in shown:
-            plan, note = _classify(it)
+            plan, _ = _classify(it)
+            if plan == "skip":
+                continue
             slug = _unique_slug(it.get("title") or "", used)
             used.add(slug)
-            filename = _planned_filename(plan, slug, it)
-            manifest.append({
-                "title": it.get("title") or "(untitled)",
+            rendered.append({
+                "title": (it.get("title") or "untitled").strip(),
                 "url": it.get("url") or "",
+                "slug": slug,
                 "plan": plan,
-                "filename": filename,
-                "note": note,
+                "filename": _planned_filename(plan, slug, it),
+                "extra_files": [],
+                "thumb": None,
+                "summary": it.get("summary") or "",
+                "kind": it.get("kind") or "",
             })
-        if len(items) > cap:
-            manifest.append({
-                "title": f"… and {len(items) - cap} more",
-                "url": "",
-                "plan": "more",
-                "filename": "",
-                "note": "(preview limited to first 50)",
-            })
-        return {"kind": "manifest", "manifest": manifest}
+
+        page_title = options.get("page_title") or "My Offline Archive"
+        footer_bits = []
+        if (options.get("footer_text") or "").strip():
+            footer_bits.append((options.get("footer_text") or "").strip())
+        footer_bits.append(
+            f"preview · planned bundle of {len(items)} item(s)"
+            + (f" (showing first {cap})" if len(items) > cap else "")
+        )
+        footer_text = " · ".join(footer_bits)
+
+        env = Environment(
+            loader=FileSystemLoader(str(theme.path)),
+            autoescape=select_autoescape(["html", "j2"]),
+        )
+        tmpl = env.get_template("archive.html.j2")
+        html = tmpl.render(
+            title=page_title,
+            footer_text=footer_text,
+            show_search=bool(options.get("show_search", True)),
+            rtl=bool(options.get("rtl", False)),
+            items=rendered,
+            skipped=[],
+            theme_vars=theme_vars,
+            generated_at=datetime.now().strftime("%Y-%m-%d %H:%M") + " (preview)",
+        )
+        return {
+            "kind": "html",
+            "filename": "index.html",
+            "mime": "text/html",
+            "content": html,
+            "truncated": len(items) > cap,
+            "preview_lines": cap if len(items) > cap else None,
+        }
 
     # ── runner ──────────────────────────────────────────────────────────────
 

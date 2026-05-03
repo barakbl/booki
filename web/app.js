@@ -35,23 +35,40 @@ const state = {
   currentId: null,  // bookmark id open in drawer
   detail: null,     // full detail payload
   schema: {},       // { sourceSlug: [FieldSpec, ...] } — from /api/schema
-  lists: [],        // [{name, count, smart?, predicates?, order?}] — from /api/lists
-  activeList: null, // name → filter main list to items in this list; null = no filter
-  activeSmartList: null, // SmartList spec ref — only one of activeList/activeSmartList is set
-  adv: {            // advanced search filters (persisted to localStorage)
-    tags: new Set(),
-    lists: new Set(),
+  // Per-tab advanced filter state. Each scope has its own copy so the
+  // Search / Photos / Videos / Documents forms don't bleed into each other.
+  // Initialised below by `_initAdvScopes()` once helpers are defined.
+  advByScope: {},
+};
+
+const ADV_SCOPES = ["search", "photo", "video", "document"];
+
+// Which `kind` values are relevant per scope — used to filter the Top-N
+// field combo so e.g. the Videos tab doesn't suggest GitHub-only fields.
+const SCOPE_KINDS = {
+  search:   null,                                // null = all kinds allowed
+  photo:    new Set(["photo", "file"]),
+  video:    new Set(["video", "channel"]),
+  document: new Set(["document"]),
+};
+
+const ADV_STORAGE_KEY = "booki.advSearch.v2";
+const ADV_STORAGE_KEY_V1 = "booki.advSearch.v1";
+
+function makeDefaultAdv() {
+  return {
     sources: new Set(),
-    kinds: new Set(),
     impMin: null,
     impMax: null,
     hasSummary: false,
     hasNotes: false,
     includeRemoved: true,
-  },
-};
+    top: { field: "", direction: "top", count: 10 },
+    _open: false,
+  };
+}
 
-const ADV_STORAGE_KEY = "booki.advSearch.v1";
+for (const s of ADV_SCOPES) state.advByScope[s] = makeDefaultAdv();
 
 // Populated at boot from /api/kinds, which aggregates every plugin's
 // kind_specs(). Adding a new kind is a plugin-side change — no edit here.
@@ -101,29 +118,12 @@ const els = {
   detailSummary: $("detailSummary"),
   detailNotes: $("detailNotes"),
   detailTags: $("detailTags"),
-  detailLists: $("detailLists"),
   detailKeywords: $("detailKeywords"),
-  listAddForm: $("listAddForm"),
-  listAddInput: $("listAddInput"),
-  listSuggestions: $("listSuggestions"),
-  secLists: $("secLists"),
-  statLists: $("statLists"),
-  listFilterClear: $("listFilterClear"),
   detailSource: $("detailSource"),
   detailBookmarked: $("detailBookmarked"),
-  advSearch: $("advSearch"),
-  advTags: $("advTags"),
-  advLists: $("advLists"),
-  advSources: $("advSources"),
-  advKinds: $("advKinds"),
-  advImpMin: $("advImpMin"),
-  advImpMax: $("advImpMax"),
-  advHasSummary: $("advHasSummary"),
-  advHasNotes: $("advHasNotes"),
-  advIncludeRemoved: $("advIncludeRemoved"),
-  advCount: $("advCount"),
-  advClear: $("advClear"),
+  advSearchHost: $("advSearchHost"),
   detailLastsync: $("detailLastsync"),
+  detailLastenriched: $("detailLastenriched"),
   detailArchive: $("detailArchive"),
   detailFile: $("detailFile"),
   secSummary: $("secSummary"),
@@ -302,15 +302,22 @@ function _bmSourceLabel(bm) {
 }
 
 // Generic table renderer — name / source / type / importance / tags.
-// Click → openDetail(id). Pass opts.onClick to override.
+// Click → openDetail(id). Pass opts.onClick to override. When opts.adv has
+// an active Top filter, an extra "Sort key" column shows the field value.
 function renderItemsTable(host, items, opts = {}) {
   const onClick = opts.onClick || ((bm) => openDetail(bm.id));
+  const adv = opts.adv;
+  const showTop = advHasTop(adv);
+  const topLabel = showTop ? _topFieldLabel(adv.top.field) : "";
   host.classList.add("items-host");
   if (!items.length) { host.innerHTML = ""; return; }
   const rows = items.map(bm => {
     const kind = bm.kind || "bookmark";
     const tags = (bm.tags || []).slice(0, 4).map(t => escapeHtml(t)).join(", ");
     const imp = bm.importance > 0 ? `★${bm.importance}` : "";
+    const topCell = showTop
+      ? `<td class="col-top">${escapeHtml(_formatTopValue(topFieldRaw(bm, adv.top.field), adv.top.field))}</td>`
+      : "";
     return `<tr data-id="${escapeHtml(bm.id)}">
       <td class="col-glyph">${KIND_GLYPH[kind] || "🔖"}</td>
       <td class="col-name">
@@ -320,13 +327,15 @@ function renderItemsTable(host, items, opts = {}) {
       <td class="col-source">${escapeHtml(_bmSourceLabel(bm))}</td>
       <td class="col-kind">${escapeHtml(kind)}</td>
       <td class="col-imp">${imp}</td>
+      ${topCell}
       <td class="col-tags">${tags}</td>
     </tr>`;
   }).join("");
+  const topHead = showTop ? `<th class="col-top-head">${escapeHtml(topLabel)}</th>` : "";
   host.innerHTML = `
     <table class="items-table">
       <thead>
-        <tr><th></th><th>Name</th><th>Source</th><th>Type</th><th>★</th><th>Tags</th></tr>
+        <tr><th></th><th>Name</th><th>Source</th><th>Type</th><th>★</th>${topHead}<th>Tags</th></tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>`;
@@ -342,6 +351,7 @@ function renderItemsTable(host, items, opts = {}) {
 // thumbnail (Search, Ask). Photos/Videos keep their richer grids.
 function renderItemsGrid(host, items, opts = {}) {
   const onClick = opts.onClick || ((bm) => openDetail(bm.id));
+  const adv = opts.adv;
   host.classList.add("items-host");
   if (!items.length) { host.innerHTML = ""; return; }
   const tiles = items.map(bm => {
@@ -351,6 +361,7 @@ function renderItemsGrid(host, items, opts = {}) {
       .map(t => `<span class="g-tag">${escapeHtml(t)}</span>`).join("");
     const imp = bm.importance > 0 ? `<span class="g-imp">★${bm.importance}</span>` : "";
     const fav = faviconUrl(bm.url);
+    const topChip = topFieldChipHtml(bm, adv);
     return `<li class="g-tile" data-id="${escapeHtml(bm.id)}" tabindex="0">
       <div class="g-thumb">
         <img class="g-fav" src="${escapeHtml(fav)}" alt="" loading="lazy"
@@ -362,6 +373,7 @@ function renderItemsGrid(host, items, opts = {}) {
         <div class="g-title" title="${escapeHtml(bm.title || "")}">${escapeHtml(bm.title || "(untitled)")}</div>
         <div class="g-source">${escapeHtml(_bmSourceLabel(bm))}</div>
         <div class="g-tags">${tags}</div>
+        ${topChip ? `<div class="g-top">${topChip}</div>` : ""}
       </div>
     </li>`;
   }).join("");
@@ -384,6 +396,7 @@ function renderItemsGrid(host, items, opts = {}) {
 // own rich rows so highlights / score chips survive.
 function renderItemsList(host, items, opts = {}) {
   const onClick = opts.onClick || ((bm) => openDetail(bm.id));
+  const adv = opts.adv;
   host.classList.add("items-host");
   if (!items.length) { host.innerHTML = ""; return; }
   const rows = items.map(bm => {
@@ -392,6 +405,7 @@ function renderItemsList(host, items, opts = {}) {
     const tags = (bm.tags || []).slice(0, 4)
       .map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("");
     const imp = bm.importance > 0 ? `<span class="star">★${bm.importance}</span>` : "";
+    const topChip = topFieldChipHtml(bm, adv);
     return `<li class="items-row" data-id="${escapeHtml(bm.id)}">
       <span class="row-glyph" title="${escapeHtml(kind)}">${glyph}</span>
       <div class="row-body">
@@ -402,7 +416,10 @@ function renderItemsList(host, items, opts = {}) {
           ${tags}
         </div>
       </div>
-      ${imp}
+      <div class="row-right">
+        ${topChip}
+        ${imp}
+      </div>
     </li>`;
   }).join("");
   host.innerHTML = `<ul class="items-list">${rows}</ul>`;
@@ -424,15 +441,23 @@ async function loadStats() {
   } catch { /* optional */ }
 }
 
+// Stats live inside Manage > General, which is mounted lazily — `renderStats`
+// caches the most-recent payload so the panel can re-render whenever the
+// sub-tab is activated.
+let _lastStatsPayload = null;
+
 function renderStats(s) {
-  const $$ = (id) => document.getElementById(id);
-  $$("statTotal").textContent    = (s.total ?? 0).toLocaleString();
-  $$("statEnriched").textContent = (s.enriched ?? 0).toLocaleString();
-  $$("statSources").textContent  = Object.keys(s.by_source || {}).length;
-  $$("statLastSync").textContent = s.last_sync || "—";
-  $$("statDir").textContent      = s.bookmarks_dir || "";
-  renderBars($$("statBySource"), s.by_source || {});
-  renderBars($$("statByKind"),   s.by_kind   || {});
+  _lastStatsPayload = s;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set("statTotal",    (s.total ?? 0).toLocaleString());
+  set("statEnriched", (s.enriched ?? 0).toLocaleString());
+  set("statSources",  Object.keys(s.by_source || {}).length);
+  set("statLastSync", s.last_sync || "—");
+  set("statDir",      s.bookmarks_dir || "");
+  const bySource = document.getElementById("statBySource");
+  if (bySource) renderBars(bySource, s.by_source || {});
+  const byKind = document.getElementById("statByKind");
+  if (byKind) renderBars(byKind, s.by_kind || {});
 }
 
 function renderBars(ul, obj) {
@@ -483,220 +508,565 @@ async function loadBookmarks() {
   }
 }
 
-// ─── Smart-list evaluator (mirrors smart_lists.py) ─────────────────
+// ─── Advanced search: predicate + sort + storage ───────────────────
+//
+// Each results-bearing tab (Search, Photos, Videos, Documents) owns its own
+// adv state under state.advByScope[scope]. Tabs render a fresh UI instance
+// via mountAdvancedSearch(host, { scope }); changes to one scope's form do
+// NOT touch the others. Instances are tracked in _advInstances[] so they
+// stay in sync after bookmarks reload.
 
-function smartListMatches(bm, spec) {
-  for (const p of (spec.predicates || [])) {
-    const actual = bm[p.field];
-    const expected = p.value;
-    switch (p.op) {
-      case "eq":  if (!_slEq(actual, expected))  return false; break;
-      case "ne":  if ( _slEq(actual, expected))  return false; break;
-      case "any": if (!_slAny(actual, expected)) return false; break;
-      case "gt":  case "gte": case "lt": case "lte": {
-        const c = _slCmp(actual, expected);
-        if (c === null) return false;
-        if (p.op === "gt"  && !(c >  0)) return false;
-        if (p.op === "gte" && !(c >= 0)) return false;
-        if (p.op === "lt"  && !(c <  0)) return false;
-        if (p.op === "lte" && !(c <= 0)) return false;
-        break;
-      }
-      default: return false;
-    }
+function getFieldValue(b, field) {
+  if (!field) return undefined;
+  switch (field) {
+    case "importance":      return b.importance || 0;
+    case "tags_count":      return (b.tags || []).length;
+    case "keywords_count":  return (b.keywords || []).length;
+    case "summary_length":  return (b.summary || "").length;
+    case "notes_length":    return (b.notes || "").length;
+    case "title_length":    return (b.title || "").length;
+    case "url_length":      return (b.url || "").length;
+    case "date_bookmarked": return parseFieldValue(b.date_bookmarked);
+    case "last_sync":       return parseFieldValue(b.last_sync);
+    case "last_enriched":   return parseFieldValue(b.last_enriched ?? (b.extras || {}).last_enriched);
   }
-  return true;
-}
-
-function _slEq(actual, expected) {
-  if (typeof expected === "boolean") return Boolean(actual) === expected;
-  if (expected === null || expected === undefined)
-    return actual === null || actual === undefined || actual === ""
-        || (Array.isArray(actual) && actual.length === 0);
-  if (Array.isArray(actual)) return actual.some(x => String(x) === String(expected));
-  return String(actual) === String(expected);
-}
-
-function _slAny(actual, wanted) {
-  if (!Array.isArray(wanted) || wanted.length === 0) return false;
-  const pool = Array.isArray(actual)
-    ? actual : (actual ? [actual] : []);
-  const have = new Set(pool.map(String));
-  return wanted.some(w => have.has(String(w)));
-}
-
-function _slCmp(left, right) {
-  if (left === null || left === undefined || left === "") return null;
-  if (right === null || right === undefined || right === "") return null;
-  // Numeric coercion if either side is a number.
-  const ln = (typeof left === "number") ? left : Number(left);
-  const rn = (typeof right === "number") ? right : Number(right);
-  if (!Number.isNaN(ln) && !Number.isNaN(rn) && (typeof left === "number" || typeof right === "number")) {
-    return ln < rn ? -1 : (ln > rn ? 1 : 0);
+  if (b.extras && Object.prototype.hasOwnProperty.call(b.extras, field)) {
+    return parseFieldValue(b.extras[field]);
   }
-  const ls = String(left), rs = String(right);
-  return ls < rs ? -1 : (ls > rs ? 1 : 0);
+  if (Object.prototype.hasOwnProperty.call(b, field)) return b[field];
+  return undefined;
 }
 
-function applySmartListOrder(rows, order) {
-  if (!order || !Array.isArray(order) || !order[0]) return rows;
-  const [field, dir] = order;
-  const reverse = dir === "desc";
-  return [...rows].sort((a, b) => {
-    const av = a.bm[field], bv = b.bm[field];
-    const aMissing = (av === null || av === undefined || av === "");
-    const bMissing = (bv === null || bv === undefined || bv === "");
-    if (aMissing && bMissing) return 0;
-    if (aMissing) return 1;   // missing always last
-    if (bMissing) return -1;
-    if (typeof av === "number" && typeof bv === "number") {
-      return reverse ? bv - av : av - bv;
+// Coerce a raw frontmatter value into something comparable. Strings shaped
+// like "MM:SS" / "HH:MM:SS" become seconds; numeric strings become numbers;
+// ISO-ish dates become unix-ms timestamps.
+function parseFieldValue(v) {
+  if (v == null || v === "") return null;
+  if (typeof v === "number" || typeof v === "boolean") return v;
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (!s) return null;
+    const dur = s.match(/^(\d+):(\d{1,2})(?::(\d{1,2}))?$/);
+    if (dur) {
+      const a = +dur[1], b = +dur[2], c = dur[3] ? +dur[3] : null;
+      return c == null ? a * 60 + b : a * 3600 + b * 60 + c;
     }
-    const as = String(av), bs = String(bv);
-    if (as === bs) return 0;
-    return reverse ? (as < bs ? 1 : -1) : (as < bs ? -1 : 1);
-  });
+    if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
+    const t = Date.parse(s);
+    if (!Number.isNaN(t)) return t;
+    return s;
+  }
+  return v;
 }
 
 function makeAdvPredicate(adv) {
   return (b) => {
-    if (adv.tags.size && !(b.tags || []).some(t => adv.tags.has(t))) return false;
-    if (adv.lists.size && !(b.lists || []).some(l => adv.lists.has(l))) return false;
     if (adv.sources.size) {
       const all = new Set([b.source, ...(b.sources || [])].filter(Boolean));
       let ok = false;
       for (const s of adv.sources) if (all.has(s)) { ok = true; break; }
       if (!ok) return false;
     }
-    if (adv.kinds.size && !adv.kinds.has(b.kind || "bookmark")) return false;
     const imp = b.importance || 0;
     if (adv.impMin != null && imp < adv.impMin) return false;
     if (adv.impMax != null && imp > adv.impMax) return false;
     if (adv.hasSummary && !b.has_summary) return false;
     if (adv.hasNotes && !(b.notes && b.notes.trim().length)) return false;
     if (!adv.includeRemoved && (b.removed_from_browser || b.removed_from_source)) return false;
+    // When a Top-N field is set, drop items that have no numeric value for it
+    // — they're not orderable, so they don't belong in a "top N by X" view.
+    const top = adv.top;
+    if (top && top.field) {
+      const v = getFieldValue(b, top.field);
+      const n = typeof v === "number" ? v : Number(v);
+      if (!Number.isFinite(n)) return false;
+    }
     return true;
   };
 }
 
+// Sort + limit by the selected field. "top" → biggest first; "bottom" →
+// smallest first. Items missing the field are filtered out by makeAdvPredicate
+// before this runs, so we just sort the survivors.
+function applyAdvSort(items, adv) {
+  const top = adv?.top;
+  if (!top || !top.field) return items;
+  const dir = top.direction === "bottom" ? 1 : -1;
+  const keyed = items.map(b => {
+    const v = getFieldValue(b, top.field);
+    const n = typeof v === "number" ? v : Number(v);
+    return { b, k: Number.isFinite(n) ? n : null };
+  });
+  keyed.sort((x, y) => {
+    if (x.k == null && y.k == null) return 0;
+    if (x.k == null) return 1;
+    if (y.k == null) return -1;
+    return (x.k - y.k) * dir;
+  });
+  const sorted = keyed.map(x => x.b);
+  const count = Number(top.count);
+  return Number.isFinite(count) && count > 0 ? sorted.slice(0, count) : sorted;
+}
+
+// True when a Top-N field is set — callers replace their default sort with
+// applyAdvSort and drop the usual cap.
+function advHasTop(adv) { return !!(adv?.top && adv.top.field); }
+
+// Raw display value for the Top field on this bookmark — preserves the
+// original on-disk string so dates stay "2026-05-03" rather than a unix-ms
+// timestamp. Computed fields (tags_count etc.) get derived inline.
+function topFieldRaw(bm, field) {
+  if (!field) return undefined;
+  switch (field) {
+    case "tags_count":     return (bm.tags || []).length;
+    case "keywords_count": return (bm.keywords || []).length;
+    case "summary_length": return (bm.summary || "").length;
+    case "notes_length":   return (bm.notes || "").length;
+    case "title_length":   return (bm.title || "").length;
+    case "url_length":     return (bm.url || "").length;
+  }
+  if (Object.prototype.hasOwnProperty.call(bm, field)) return bm[field];
+  if (bm.extras && Object.prototype.hasOwnProperty.call(bm.extras, field)) {
+    return bm.extras[field];
+  }
+  return undefined;
+}
+
+const TOP_FIELD_LABELS = {
+  importance: "Importance",
+  tags_count: "Tags",
+  keywords_count: "Keywords",
+  summary_length: "Summary",
+  notes_length: "Notes",
+  title_length: "Title",
+  url_length: "URL",
+  date_bookmarked: "Bookmarked",
+  last_sync: "Last sync",
+  last_enriched: "Last enriched",
+};
+
+function _topFieldLabel(field) {
+  if (TOP_FIELD_LABELS[field]) return TOP_FIELD_LABELS[field];
+  for (const key of Object.keys(state.schema || {})) {
+    for (const spec of state.schema[key] || []) {
+      if (spec && spec.name === field) return spec.label || field;
+    }
+  }
+  return field;
+}
+
+function _formatTopValue(v, field) {
+  if (v == null || v === "") return "—";
+  if (Array.isArray(v)) return `${v.length}`;
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  if (typeof v === "number") {
+    if (field === "file_size") {
+      if (v >= 1e9) return (v / 1e9).toFixed(1) + " GB";
+      if (v >= 1e6) return (v / 1e6).toFixed(1) + " MB";
+      if (v >= 1e3) return (v / 1e3).toFixed(1) + " KB";
+      return v + " B";
+    }
+    if (field === "github_size_kb") {
+      if (v >= 1e6) return (v / 1e6).toFixed(1) + " GB";
+      if (v >= 1e3) return (v / 1e3).toFixed(1) + " MB";
+      return v + " KB";
+    }
+    return v.toLocaleString();
+  }
+  return String(v);
+}
+
+// Returns an HTML chip showing the Top-field value for `bm`, or "" if the
+// scope's Top filter is inactive. Used by row/list/table/tile renderers.
+function topFieldChipHtml(bm, adv) {
+  if (!advHasTop(adv)) return "";
+  const field = adv.top.field;
+  const raw = topFieldRaw(bm, field);
+  const display = _formatTopValue(raw, field);
+  const label = _topFieldLabel(field);
+  return `<span class="score-chip top" title="Sorted by ${escapeHtml(field)}">`
+       + `📊 ${escapeHtml(label)}: ${escapeHtml(display)}</span>`;
+}
+
 function advActiveCount(adv) {
-  let n = adv.tags.size + adv.lists.size + adv.sources.size + adv.kinds.size;
+  let n = adv.sources.size;
   if (adv.impMin != null) n++;
   if (adv.impMax != null) n++;
   if (adv.hasSummary) n++;
   if (adv.hasNotes) n++;
   if (!adv.includeRemoved) n++;
+  if (adv.top && adv.top.field) n++;
   return n;
 }
 
-function refreshAdvBadge() {
-  const n = advActiveCount(state.adv);
-  els.advCount.textContent = n;
-  els.advCount.classList.toggle("hidden", n === 0);
-  els.advClear.classList.toggle("hidden", n === 0);
+function _hydrateAdvFromJson(adv, j) {
+  if (!j) return;
+  adv.sources = new Set(j.sources || []);
+  adv.impMin = j.impMin ?? null;
+  adv.impMax = j.impMax ?? null;
+  adv.hasSummary = !!j.hasSummary;
+  adv.hasNotes = !!j.hasNotes;
+  adv.includeRemoved = j.includeRemoved !== false;
+  if (j.top && typeof j.top === "object") {
+    adv.top = {
+      field: String(j.top.field || ""),
+      direction: j.top.direction === "bottom" ? "bottom" : "top",
+      count: Number.isFinite(+j.top.count) ? +j.top.count : 10,
+    };
+  }
+  adv._open = !!j.open;
+}
+
+function _serializeAdv(adv) {
+  return {
+    sources: [...adv.sources],
+    impMin: adv.impMin,
+    impMax: adv.impMax,
+    hasSummary: adv.hasSummary,
+    hasNotes: adv.hasNotes,
+    includeRemoved: adv.includeRemoved,
+    top: { ...adv.top },
+    open: !!adv._open,
+  };
 }
 
 function loadAdvFromStorage() {
   try {
     const raw = localStorage.getItem(ADV_STORAGE_KEY);
-    if (!raw) return;
-    const j = JSON.parse(raw);
-    state.adv.tags = new Set(j.tags || []);
-    state.adv.lists = new Set(j.lists || []);
-    state.adv.sources = new Set(j.sources || []);
-    state.adv.kinds = new Set(j.kinds || []);
-    state.adv.impMin = j.impMin ?? null;
-    state.adv.impMax = j.impMax ?? null;
-    state.adv.hasSummary = !!j.hasSummary;
-    state.adv.hasNotes = !!j.hasNotes;
-    state.adv.includeRemoved = j.includeRemoved !== false;
-    if (j.open) els.advSearch?.setAttribute("open", "");
+    if (raw) {
+      const j = JSON.parse(raw);
+      for (const s of ADV_SCOPES) {
+        if (j[s]) _hydrateAdvFromJson(state.advByScope[s], j[s]);
+      }
+      return;
+    }
+    // First-run migration from v1 (single shared state) — apply the same
+    // saved filters to every scope so users don't lose their selection.
+    const old = localStorage.getItem(ADV_STORAGE_KEY_V1);
+    if (old) {
+      const j = JSON.parse(old);
+      for (const s of ADV_SCOPES) _hydrateAdvFromJson(state.advByScope[s], j);
+    }
   } catch { /* ignore corrupt storage */ }
 }
 
 function saveAdvToStorage() {
   try {
-    localStorage.setItem(ADV_STORAGE_KEY, JSON.stringify({
-      tags: [...state.adv.tags],
-      lists: [...state.adv.lists],
-      sources: [...state.adv.sources],
-      kinds: [...state.adv.kinds],
-      impMin: state.adv.impMin,
-      impMax: state.adv.impMax,
-      hasSummary: state.adv.hasSummary,
-      hasNotes: state.adv.hasNotes,
-      includeRemoved: state.adv.includeRemoved,
-      open: !!els.advSearch?.open,
-    }));
+    const out = {};
+    for (const s of ADV_SCOPES) out[s] = _serializeAdv(state.advByScope[s]);
+    localStorage.setItem(ADV_STORAGE_KEY, JSON.stringify(out));
   } catch { /* quota / private mode — fail silently */ }
 }
 
-// Re-render the chip pickers from current state.all + state.adv.
-function refreshAdvancedFilters() {
-  const tagCounts = {}, listCounts = {}, sourceCounts = {}, kindCounts = {};
-  state.all.forEach(b => {
-    (b.tags || []).forEach(t => { tagCounts[t] = (tagCounts[t] || 0) + 1; });
-    (b.lists || []).forEach(l => { listCounts[l] = (listCounts[l] || 0) + 1; });
-    [b.source, ...(b.sources || [])].filter(Boolean).forEach(s => {
-      sourceCounts[s] = (sourceCounts[s] || 0) + 1;
-    });
-    const k = b.kind || "bookmark";
-    kindCounts[k] = (kindCounts[k] || 0) + 1;
-  });
-  const sorted = (m) => Object.entries(m).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const onChange = () => { saveAdvToStorage(); refreshAdvBadge(); applyFilter(); };
-
-  renderChipPicker(els.advTags, sorted(tagCounts), state.adv.tags,
-                   (n) => { toggleSet(state.adv.tags, n); onChange(); });
-  renderChipPicker(els.advLists, sorted(listCounts), state.adv.lists,
-                   (n) => { toggleSet(state.adv.lists, n); onChange(); });
-  renderChipPicker(els.advSources, sorted(sourceCounts), state.adv.sources,
-                   (n) => { toggleSet(state.adv.sources, n); onChange(); });
-  renderChipPicker(els.advKinds, sorted(kindCounts), state.adv.kinds,
-                   (n) => { toggleSet(state.adv.kinds, n); onChange(); });
-
-  // Sync misc inputs from state (covers reload-from-localStorage case).
-  els.advImpMin.value = state.adv.impMin ?? "";
-  els.advImpMax.value = state.adv.impMax ?? "";
-  els.advHasSummary.checked = state.adv.hasSummary;
-  els.advHasNotes.checked = state.adv.hasNotes;
-  els.advIncludeRemoved.checked = state.adv.includeRemoved;
-  refreshAdvBadge();
+function clearAdvFilters(scope) {
+  state.advByScope[scope] = makeDefaultAdv();
+  saveAdvToStorage();
+  notifyAdvChange(scope);
 }
 
-function clearAdvFilters() {
-  state.adv.tags.clear();
-  state.adv.lists.clear();
-  state.adv.sources.clear();
-  state.adv.kinds.clear();
-  state.adv.impMin = null;
-  state.adv.impMax = null;
-  state.adv.hasSummary = false;
-  state.adv.hasNotes = false;
-  state.adv.includeRemoved = true;
-  refreshAdvancedFilters();
-  saveAdvToStorage();
-  applyFilter();
+// ─── Shared chip-picker / set helpers ──────────────────────────────
+
+function toggleSet(set, val) {
+  if (set.has(val)) set.delete(val); else set.add(val);
+}
+
+function renderChipPicker(host, entries, selectedSet, onToggle) {
+  if (!host) return;
+  host.innerHTML = "";
+  if (!entries.length) {
+    host.innerHTML = `<span class="hint-text">(none)</span>`;
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const [name, count] of entries) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    const on = selectedSet.has(name);
+    btn.className = "adv-chip" + (on ? " on" : "");
+    btn.dataset.value = name;
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    const label = (name === "bookmark" || name === "photo" || name === "video"
+                || name === "document" || name === "file" || name === "channel"
+                || name === "post")
+      ? (KIND_LABEL[name] || name) : name;
+    btn.innerHTML = `<span class="adv-chip-label">${escapeHtml(label)}</span>`
+                  + ` <span class="adv-chip-count">${count}</span>`;
+    btn.addEventListener("click", () => onToggle(name));
+    frag.appendChild(btn);
+  }
+  host.appendChild(frag);
+}
+
+// ─── Advanced UI: per-tab mounting ─────────────────────────────────
+//
+// Each instance binds to one entry of state.advByScope. Updating that scope
+// fires notifyAdvChange(scope) which only re-renders the matching tab and
+// any same-scope listeners — other tabs' forms keep their own state.
+
+const _advInstances = [];          // [{el, refresh, onApply}, ...]
+const _advChangeListeners = new Set();
+
+// Only numeric/orderable fields qualify for Top-N — the comparison is
+// strictly numeric (durations and dates parse to seconds / unix-ms).
+const NUMERIC_FORMATS = new Set(["number", "duration", "date"]);
+
+function buildFieldOptions(scope) {
+  const core = [
+    { name: "importance",      label: "Importance" },
+    { name: "tags_count",      label: "Tag count" },
+    { name: "keywords_count",  label: "Keyword count" },
+    { name: "summary_length",  label: "Summary length" },
+    { name: "notes_length",    label: "Notes length" },
+    { name: "title_length",    label: "Title length" },
+    { name: "url_length",      label: "URL length" },
+    { name: "date_bookmarked", label: "Date bookmarked" },
+    { name: "last_sync",       label: "Last sync" },
+    { name: "last_enriched",   label: "Last enriched" },
+  ];
+  const allowedKinds = SCOPE_KINDS[scope || "search"] || null;  // null → all
+  const seen = new Set(core.map(c => c.name));
+  const extras = [];
+  for (const key of Object.keys(state.schema || {})) {
+    for (const spec of state.schema[key] || []) {
+      if (!spec || !spec.name || seen.has(spec.name)) continue;
+      if (!NUMERIC_FORMATS.has(spec.format)) continue;
+      // If the spec restricts itself to certain kinds, only include it when
+      // at least one of those kinds is relevant to this tab.
+      if (allowedKinds && Array.isArray(spec.kinds) && spec.kinds.length) {
+        if (!spec.kinds.some(k => allowedKinds.has(k))) continue;
+      }
+      seen.add(spec.name);
+      extras.push({ name: spec.name, label: spec.label || spec.name, group: spec.group });
+    }
+  }
+  extras.sort((a, b) => (a.group || "").localeCompare(b.group || "")
+                    || a.label.localeCompare(b.label));
+  return [...core, ...extras];
+}
+
+function mountAdvancedSearch(host, opts = {}) {
+  if (!host) return null;
+  const scope = opts.scope || "search";
+  if (!state.advByScope[scope]) state.advByScope[scope] = makeDefaultAdv();
+  const adv = state.advByScope[scope];
+  const fieldsListId = `advTopFields_${_advInstances.length}`;
+  host.innerHTML = `
+    <details class="adv-search">
+      <summary>
+        <span class="adv-caret" aria-hidden="true">▸</span>
+        <span class="adv-title">Advanced</span>
+        <span class="adv-count hidden" data-role="count" title="Active filters">0</span>
+        <button type="button" class="adv-clear hidden" data-role="clear"
+                title="Clear all advanced filters">✕ Clear</button>
+      </summary>
+      <div class="adv-grid">
+        <div class="adv-group adv-misc">
+          <h4>Sources <span class="hint-text">(any)</span></h4>
+          <div class="chip-picker" data-role="sources"></div>
+        </div>
+        <div class="adv-group adv-misc">
+          <h4>Top <span class="hint-text">(field · direction · count)</span></h4>
+          <div class="adv-row adv-top-row">
+            <input type="text" class="adv-top-field" data-role="topField"
+                   list="${fieldsListId}" placeholder="field…" autocomplete="off"
+                   spellcheck="false">
+            <datalist id="${fieldsListId}" data-role="topFieldList"></datalist>
+            <div class="adv-top-dirs" role="group" aria-label="Direction" data-role="topDirs">
+              <button type="button" class="adv-dir-btn" data-dir="top"
+                      title="largest values first">▲ Top</button>
+              <button type="button" class="adv-dir-btn" data-dir="bottom"
+                      title="smallest values first">▼ Bottom</button>
+            </div>
+            <input type="number" class="adv-top-count" data-role="topCount" min="1" step="1" placeholder="10">
+            <button type="button" class="adv-top-clear" data-role="topClear"
+                    title="Clear top filter">✕</button>
+          </div>
+        </div>
+        <div class="adv-group adv-misc">
+          <h4>Other</h4>
+          <div class="adv-row">
+            <label>Importance ≥
+              <input type="number" data-role="impMin" min="0" max="10" step="1" placeholder="0">
+            </label>
+            <label>≤
+              <input type="number" data-role="impMax" min="0" max="10" step="1" placeholder="10">
+            </label>
+            <label class="toggle"><input type="checkbox" data-role="hasSummary"> has summary</label>
+            <label class="toggle"><input type="checkbox" data-role="hasNotes"> has notes</label>
+            <label class="toggle"><input type="checkbox" data-role="includeRemoved" checked> include removed</label>
+          </div>
+        </div>
+      </div>
+    </details>`;
+  const root = host.querySelector(".adv-search");
+  if (adv._open) root.setAttribute("open", "");
+  // Fresh getter — `clearAdvFilters` replaces the whole object, so handlers
+  // must always read the current scope state instead of a captured ref.
+  const get = () => state.advByScope[scope];
+  root.addEventListener("toggle", () => {
+    get()._open = root.open;
+    saveAdvToStorage();
+  });
+
+  const $$ = (role) => root.querySelector(`[data-role="${role}"]`);
+  const apply = () => { saveAdvToStorage(); notifyAdvChange(scope); };
+
+  $$("clear").addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    clearAdvFilters(scope);
+  });
+
+  $$("impMin").addEventListener("input", (e) => {
+    const v = e.target.value === "" ? null : Number(e.target.value);
+    get().impMin = Number.isFinite(v) ? v : null;
+    apply();
+  });
+  $$("impMax").addEventListener("input", (e) => {
+    const v = e.target.value === "" ? null : Number(e.target.value);
+    get().impMax = Number.isFinite(v) ? v : null;
+    apply();
+  });
+  $$("hasSummary").addEventListener("change", (e) => {
+    get().hasSummary = e.target.checked; apply();
+  });
+  $$("hasNotes").addEventListener("change", (e) => {
+    get().hasNotes = e.target.checked; apply();
+  });
+  $$("includeRemoved").addEventListener("change", (e) => {
+    get().includeRemoved = e.target.checked; apply();
+  });
+
+  // Top filter wiring.
+  const topField = $$("topField");
+  const topCount = $$("topCount");
+  const topDirs  = $$("topDirs");
+  topField.addEventListener("input", (e) => {
+    get().top.field = e.target.value.trim();
+    apply();
+  });
+  topField.addEventListener("change", (e) => {
+    get().top.field = e.target.value.trim();
+    apply();
+  });
+  topCount.addEventListener("input", (e) => {
+    const v = Number(e.target.value);
+    get().top.count = Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+    apply();
+  });
+  topDirs.querySelectorAll(".adv-dir-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      get().top.direction = btn.dataset.dir;
+      apply();
+    });
+  });
+  $$("topClear").addEventListener("click", () => {
+    get().top = { field: "", direction: "top", count: 10 };
+    apply();
+  });
+
+  const refresh = () => {
+    // Re-bind to whatever's currently in state — clearAdvFilters() replaces
+    // the whole object, so an older closure could go stale otherwise.
+    const cur = state.advByScope[scope];
+
+    // Counts derived from the current bookmark snapshot. For non-search
+    // scopes, restrict the count pool to items relevant to that tab so the
+    // chips reflect what's actually filterable here.
+    const allowed = SCOPE_KINDS[scope];
+    const pool = allowed
+      ? state.all.filter(b => allowed.has(b.kind || "bookmark"))
+      : state.all;
+    const sourceCounts = {};
+    for (const b of pool) {
+      [b.source, ...(b.sources || [])].filter(Boolean).forEach(s => {
+        sourceCounts[s] = (sourceCounts[s] || 0) + 1;
+      });
+    }
+    const sortPairs = (m) => Object.entries(m)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+    renderChipPicker($$("sources"), sortPairs(sourceCounts), cur.sources,
+      (n) => { toggleSet(cur.sources, n); apply(); });
+
+    // Datalist for the top-field combobox — narrowed to fields that make
+    // sense in this scope (e.g. Videos hides github_* / photo_*).
+    const dl = $$("topFieldList");
+    dl.innerHTML = "";
+    for (const f of buildFieldOptions(scope)) {
+      const opt = document.createElement("option");
+      opt.value = f.name;
+      opt.label = f.label + (f.group ? ` · ${f.group}` : "");
+      dl.appendChild(opt);
+    }
+
+    // Sync misc inputs.
+    $$("impMin").value = cur.impMin ?? "";
+    $$("impMax").value = cur.impMax ?? "";
+    $$("hasSummary").checked = cur.hasSummary;
+    $$("hasNotes").checked = cur.hasNotes;
+    $$("includeRemoved").checked = cur.includeRemoved;
+    topField.value = cur.top.field || "";
+    topCount.value = (cur.top.count ?? 10);
+    topDirs.querySelectorAll(".adv-dir-btn").forEach(btn => {
+      btn.classList.toggle("on", btn.dataset.dir === (cur.top.direction || "top"));
+    });
+
+    const n = advActiveCount(cur);
+    const countEl = $$("count");
+    const clearEl = $$("clear");
+    countEl.textContent = n;
+    countEl.classList.toggle("hidden", n === 0);
+    clearEl.classList.toggle("hidden", n === 0);
+  };
+
+  const inst = { el: root, host, refresh, scope };
+  _advInstances.push(inst);
+  refresh();
+  return inst;
+}
+
+function refreshAdvancedFilters(scope) {
+  // Refresh instances. If `scope` is omitted, refresh all (used after the
+  // initial bookmarks load to populate freshly-mounted UIs). Drops detached
+  // instances along the way so the registry doesn't grow unbounded.
+  for (let i = _advInstances.length - 1; i >= 0; i--) {
+    const inst = _advInstances[i];
+    if (!document.body.contains(inst.host)) {
+      _advInstances.splice(i, 1);
+      continue;
+    }
+    if (scope && inst.scope !== scope) continue;
+    try { inst.refresh(); } catch (e) { console.error(e); }
+  }
+}
+
+function notifyAdvChange(scope) {
+  refreshAdvancedFilters(scope);
+  if (scope === "search") { try { applyFilter(); } catch (e) { console.error(e); } }
+  if (scope === "photo")  { try { renderPhotoGrid(); } catch {} }
+  if (scope === "video")  { try { renderVideoGrid(); } catch {} }
+  for (const cb of _advChangeListeners) {
+    try { cb(state.advByScope[scope], scope); } catch (e) { console.error(e); }
+  }
 }
 
 function applyFilter() {
   const q = els.findInput.value.trim();
-  const inList = state.activeList
-    ? (b) => (b.lists || []).includes(state.activeList)
-    : () => true;
-  const matchSmart = state.activeSmartList
-    ? (b) => smartListMatches(b, state.activeSmartList)
-    : () => true;
-  const matchAdv = makeAdvPredicate(state.adv);
-  const pool = state.all.filter(b => inList(b) && matchSmart(b) && matchAdv(b));
+  const adv = state.advByScope.search;
+  const matchAdv = makeAdvPredicate(adv);
+  const pool = state.all.filter(matchAdv);
+  const topSorts = advHasTop(adv);
+
   if (!q) {
-    state.filtered = pool.map(b => ({ bm: b, score: b.importance * 2, titleMatches: [], urlMatches: [] }));
-    const order = state.activeSmartList?.order;
-    if (order) {
-      state.filtered = applySmartListOrder(state.filtered, order);
+    let rows = pool.map(b => ({ bm: b, score: b.importance * 2, titleMatches: [], urlMatches: [] }));
+    if (topSorts) {
+      const sorted = applyAdvSort(pool, adv);
+      rows = sorted.map(b => ({ bm: b, score: 0, titleMatches: [], urlMatches: [] }));
     } else {
-      state.filtered.sort((a, b) => b.score - a.score);
+      rows.sort((a, b) => b.score - a.score);
     }
+    state.filtered = rows;
   } else {
     const match = state.fuzzy ? fuzzyMatch : substringMatch;
     const out = [];
@@ -728,14 +1098,36 @@ function applyFilter() {
         urlMatches: um ? um.matches : [],
       });
     }
-    out.sort((a, b) => b.score - a.score);
-    state.filtered = out.slice(0, 200);
+    if (topSorts) {
+      // When Top sort is active, replace fuzzy/substring score order with the
+      // field-based order (already limited to count) — keep highlight matches.
+      const byId = new Map(out.map(r => [r.bm.id, r]));
+      const ordered = applyAdvSort(out.map(r => r.bm), adv);
+      state.filtered = ordered.map(b => byId.get(b.id)).filter(Boolean);
+    } else {
+      out.sort((a, b) => b.score - a.score);
+      state.filtered = out.slice(0, 200);
+    }
   }
   state.selected = 0;
   renderResults();
 }
 
 function renderResults() {
+  // Per-tab count line: matches the "X of Y bookmarks" pattern used by the
+  // Photos / Videos tabs, so the user can see how many results their query
+  // and Advanced filter are surfacing.
+  const sc = document.getElementById("searchCount");
+  if (sc) {
+    const total = state.all.length;
+    const shown = state.filtered.length;
+    const q = (els.findInput?.value || "").trim();
+    const adv = state.advByScope.search;
+    const filtered = q || advActiveCount(adv) > 0;
+    const word = total === 1 ? "bookmark" : "bookmarks";
+    sc.textContent = filtered ? `${shown} of ${total} ${word}` : `${total} ${word}`;
+  }
+
   if (state.filtered.length === 0) {
     els.results.innerHTML = "";
     els.results.className = "results";
@@ -746,19 +1138,20 @@ function renderResults() {
 
   const mode = _viewModeFor("search", "list");
   const items = state.filtered.map(r => r.bm);
+  const adv = state.advByScope.search;
   els.results.className = "results";
-  if (mode === "grid")  { renderItemsGrid(els.results, items); return; }
-  if (mode === "table") { renderItemsTable(els.results, items); return; }
+  if (mode === "grid")  { renderItemsGrid(els.results, items, { adv }); return; }
+  if (mode === "table") { renderItemsTable(els.results, items, { adv }); return; }
 
   // mode === "list" — keep rich rows with score chips + match highlights.
   const frag = document.createDocumentFragment();
   state.filtered.forEach((row, i) => {
-    frag.appendChild(renderRow(row, i === state.selected));
+    frag.appendChild(renderRow(row, i === state.selected, adv));
   });
   els.results.replaceChildren(frag);
 }
 
-function renderRow(row, selected) {
+function renderRow(row, selected, adv) {
   const { bm, titleMatches, urlMatches, fuzzyScore, vectorScore } = row;
   const li = document.createElement("li");
   const removed = bm.removed_from_browser || bm.removed_from_source;
@@ -796,6 +1189,9 @@ function renderRow(row, selected) {
   const right = document.createElement("div");
   right.className = "bm-right";
   const scoreChips = [];
+  // Show the sort-key value first so the user can see why this row is here.
+  const topChip = topFieldChipHtml(bm, adv);
+  if (topChip) scoreChips.push(topChip);
   if (typeof vectorScore === "number") {
     const pct = Math.round(vectorScore * 100);
     scoreChips.push(`<span class="score-chip vec" title="Vector similarity (cosine)">🧭 ${pct}%</span>`);
@@ -815,14 +1211,12 @@ function renderRow(row, selected) {
 
 function renderMetaRow(bm) {
   const tags = (bm.tags || []).slice(0, 4).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("");
-  const lists = (bm.lists || []).slice(0, 4)
-    .map(l => `<span class="tag list">📋 ${escapeHtml(l)}</span>`).join("");
   const labels = sourceLabels(bm);
   const source = labels
     .map(s => `<span class="tag src">${escapeHtml(s)}</span>`)
     .join("");
   const enriched = bm.has_summary ? `<span class="tag">✨ summary</span>` : "";
-  return `<div class="bm-meta">${source}${lists}${tags}${enriched}</div>`;
+  return `<div class="bm-meta">${source}${tags}${enriched}</div>`;
 }
 
 function sourceLabels(bm) {
@@ -945,12 +1339,14 @@ async function openDetail(id) {
   toggleSection(els.secSummary, d.summary, () => els.detailSummary.textContent = d.summary);
   toggleSection(els.secNotes,   d.notes,   () => els.detailNotes.textContent = d.notes);
   toggleSection(els.secTags,    d.tags?.length, () => renderChips(els.detailTags, d.tags));
-  renderDetailLists(d);
   toggleSection(els.secKeywords, d.keywords?.length, () => renderChips(els.detailKeywords, d.keywords));
 
   els.detailSource.textContent     = d.source || "—";
   els.detailBookmarked.textContent = d.date_bookmarked || "—";
   els.detailLastsync.textContent   = d.last_sync || "—";
+  // last_enriched lives in extras (it's not part of CORE_FIELDS server-side)
+  // until it gets promoted; surface it here so users can confirm an enrich run.
+  els.detailLastenriched.textContent = ((d.extras || {}).last_enriched) || d.last_enriched || "—";
   els.detailArchive.innerHTML      = d.archive_url
     ? `<a href="${escapeHtml(d.archive_url)}" target="_blank" rel="noopener">${escapeHtml(d.archive_url)}</a>`
     : "—";
@@ -1440,6 +1836,25 @@ window.booki.search = {
   // Live read of the global "fuzzy on/off" toggle so plugin tabs honor it.
   get useFuzzy() { return !!state.fuzzy; },
 };
+// Plugin tabs use this to embed the same Advanced filter UI and apply the
+// scoped filters/sort. Each scope's state is independent.
+window.booki.adv = {
+  // Plugin tabs pass `{ scope: "<tab-id>" }` so the form has its own
+  // independent state, plus a field combo narrowed to that scope's kinds.
+  mountInto: (host, opts = {}) => mountAdvancedSearch(host, opts),
+  predicate:  (scope) => makeAdvPredicate(state.advByScope[scope] || makeDefaultAdv()),
+  applySort:  (items, scope) => applyAdvSort(items, state.advByScope[scope] || makeDefaultAdv()),
+  hasTopSort: (scope) => advHasTop(state.advByScope[scope] || makeDefaultAdv()),
+  // For inline rendering: returns an HTML chip showing the Top-field value
+  // for `bm`, or "" if the scope's Top filter isn't active.
+  topChip: (bm, scope) => topFieldChipHtml(bm, state.advByScope[scope] || makeDefaultAdv()),
+  // Listener fires with (adv, scope) — callers can ignore other scopes.
+  onChange: (cb) => {
+    if (typeof cb !== "function") return () => {};
+    _advChangeListeners.add(cb);
+    return () => _advChangeListeners.delete(cb);
+  },
+};
 
 // ─── Built-in tabs ─────────────────────────────────────────────────
 
@@ -1453,6 +1868,7 @@ Tabs.register({
       tb.innerHTML = viewToggleHtml("search", ["list", "grid", "table"], "list");
       wireViewToggle(tb, "search", () => renderResults());
     }
+    if (els.advSearchHost) mountAdvancedSearch(els.advSearchHost, { scope: "search" });
   },
   onShow() { els.findInput?.focus?.(); refreshExportButton(); },
   getSelection: () => ({ kind: "any", ids: idsFromContainer("#results") }),
@@ -1475,6 +1891,7 @@ Tabs.register({
                  placeholder="Search photos by title or URL…">
           <span class="hint">↵ open · click for details</span>
         </div>
+        <div class="adv-host" id="photoAdvHost"></div>
         <ul class="photo-grid" id="photoGrid"></ul>
         <p class="tab-empty hidden" id="photoEmpty">
           No photos yet — the photo enricher tags items by URL pattern.<br>
@@ -1504,6 +1921,9 @@ Tabs.register({
         else input.blur();
       }
     });
+
+    const advHost = document.getElementById("photoAdvHost");
+    if (advHost) mountAdvancedSearch(advHost, { scope: "photo" });
   },
   onShow() {
     renderPhotoGrid();
@@ -1565,13 +1985,19 @@ function renderPhotoGrid() {
   }
   empty.classList.add("hidden");
 
+  // Photos tab uses its own scope so changes here don't bleed into Search.
+  const adv = state.advByScope.photo;
+  const advPred = makeAdvPredicate(adv);
+  const filtered = all.filter(advPred);
+  const topSorts = advHasTop(adv);
+
   // Apply this tab's local search; falls back to importance-sort when empty.
   const q = (input?.value || "").trim();
   let photos;
   if (q) {
     const match = state.fuzzy ? fuzzyMatch : substringMatch;
     const scored = [];
-    for (const b of all) {
+    for (const b of filtered) {
       const tm = match(q, b.title || "");
       const um = match(q, b.url || "");
       const em = match(q, (b.tags || []).join(" "));
@@ -1582,10 +2008,13 @@ function renderPhotoGrid() {
               + (b.importance || 0) * 0.5;
       scored.push({ bm: b, score: s });
     }
-    scored.sort((a, b) => b.score - a.score);
-    photos = scored.map(x => x.bm).slice(0, 200);
+    photos = topSorts
+      ? applyAdvSort(scored.map(x => x.bm), adv)
+      : scored.sort((a, b) => b.score - a.score).map(x => x.bm).slice(0, 200);
   } else {
-    photos = [...all].sort((a, b) => (b.importance || 0) - (a.importance || 0));
+    photos = topSorts
+      ? applyAdvSort(filtered, adv)
+      : [...filtered].sort((a, b) => (b.importance || 0) - (a.importance || 0));
   }
 
   count.textContent = q
@@ -1605,11 +2034,11 @@ function renderPhotoGrid() {
   // generic list/table renderers).
   grid.className = "";
   if (mode === "table") {
-    renderItemsTable(grid, photos);
+    renderItemsTable(grid, photos, { adv });
     return;
   }
   if (mode === "list") {
-    renderItemsList(grid, photos);
+    renderItemsList(grid, photos, { adv });
     return;
   }
   // mode === "grid" — keep the existing photo-thumbnail tile grid.
@@ -1626,11 +2055,13 @@ function renderPhotoGrid() {
       ? `<img loading="lazy" src="${escapeHtml(imageSrcFor(b.url))}" alt="${escapeHtml(b.title || '')}">`
       : `<span class="photo-placeholder">🖼</span>`;
 
+    const topChip = topFieldChipHtml(b, adv);
     li.innerHTML = `
       <div class="photo-thumb">${imgHtml}</div>
       <div class="photo-meta">
         <div class="photo-title" title="${escapeHtml(b.title || '')}">${escapeHtml(b.title || "(untitled)")}</div>
         ${b.importance ? `<div class="photo-imp">★${b.importance}</div>` : ""}
+        ${topChip ? `<div class="tile-top">${topChip}</div>` : ""}
       </div>`;
 
     li.addEventListener("click", () => openDetail(b.id));
@@ -1671,6 +2102,7 @@ Tabs.register({
                  placeholder="Search videos by title, channel, or URL…">
           <span class="hint">↵ open · click for details</span>
         </div>
+        <div class="adv-host" id="videoAdvHost"></div>
         <ul class="video-grid" id="videoGrid"></ul>
         <p class="tab-empty hidden" id="videoEmpty">
           No videos yet. The YouTube source plugin pulls liked / watched videos
@@ -1699,6 +2131,8 @@ Tabs.register({
         else input.blur();
       }
     });
+    const advHost = document.getElementById("videoAdvHost");
+    if (advHost) mountAdvancedSearch(advHost, { scope: "video" });
   },
   onShow() {
     renderVideoGrid();
@@ -1733,12 +2167,17 @@ function renderVideoGrid() {
   }
   empty.classList.add("hidden");
 
+  const adv = state.advByScope.video;
+  const advPred = makeAdvPredicate(adv);
+  const filtered = all.filter(advPred);
+  const topSorts = advHasTop(adv);
+
   const q = (input?.value || "").trim();
   let videos;
   if (q) {
     const match = state.fuzzy ? fuzzyMatch : substringMatch;
     const scored = [];
-    for (const b of all) {
+    for (const b of filtered) {
       const e = b.extras || {};
       const channel = String(e.channel || "");
       const tm = match(q, b.title || "");
@@ -1753,10 +2192,13 @@ function renderVideoGrid() {
               + (b.importance || 0) * 0.5;
       scored.push({ bm: b, score: s });
     }
-    scored.sort((a, b) => b.score - a.score);
-    videos = scored.map(x => x.bm).slice(0, 200);
+    videos = topSorts
+      ? applyAdvSort(scored.map(x => x.bm), adv)
+      : scored.sort((a, b) => b.score - a.score).map(x => x.bm).slice(0, 200);
   } else {
-    videos = [...all].sort((a, b) => (b.importance || 0) - (a.importance || 0))
+    videos = topSorts
+      ? applyAdvSort(filtered, adv)
+      : [...filtered].sort((a, b) => (b.importance || 0) - (a.importance || 0))
                      .slice(0, 200);
   }
 
@@ -1774,11 +2216,11 @@ function renderVideoGrid() {
   const mode = _viewModeFor("videos", "grid");
   grid.className = "";
   if (mode === "table") {
-    renderItemsTable(grid, videos);
+    renderItemsTable(grid, videos, { adv });
     return;
   }
   if (mode === "list") {
-    renderItemsList(grid, videos);
+    renderItemsList(grid, videos, { adv });
     return;
   }
   // mode === "grid" — keep existing video-poster grid.
@@ -1800,6 +2242,7 @@ function renderVideoGrid() {
       : `<span class="video-placeholder">🎬</span>`;
     const durHtml = dur ? `<span class="video-duration">${escapeHtml(dur)}</span>` : "";
 
+    const topChip = topFieldChipHtml(b, adv);
     li.innerHTML = `
       <div class="video-thumb">
         ${thumbHtml}
@@ -1810,6 +2253,7 @@ function renderVideoGrid() {
         ${channel
           ? `<div class="video-channel" title="${escapeHtml(channel)}">${escapeHtml(channel)}</div>`
           : ""}
+        ${topChip ? `<div class="tile-top">${topChip}</div>` : ""}
       </div>`;
 
     li.addEventListener("click", () => openDetail(b.id));
@@ -1902,9 +2346,35 @@ Tabs.register({
         </section>
 
         <section class="subtab-panel" data-subpanel="info">
-          <dl class="info-grid" id="manageInfo">
-            <dt>Loading…</dt><dd></dd>
-          </dl>
+          <div class="info-cards">
+            <article class="info-card info-card-wide">
+              <header><span class="info-glyph">📊</span><h3>Library</h3></header>
+              <dl class="info-grid">
+                <dt>Items</dt>     <dd id="statTotal">—</dd>
+                <dt>Enriched</dt>  <dd id="statEnriched">—</dd>
+                <dt>Sources</dt>   <dd id="statSources">—</dd>
+                <dt>Last sync</dt> <dd id="statLastSync">—</dd>
+              </dl>
+            </article>
+
+            <article class="info-card">
+              <header><span class="info-glyph">🔌</span><h3>By source</h3></header>
+              <ul class="bar-list" id="statBySource"></ul>
+            </article>
+
+            <article class="info-card">
+              <header><span class="info-glyph">🧩</span><h3>By kind</h3></header>
+              <ul class="bar-list" id="statByKind"></ul>
+            </article>
+
+            <article class="info-card info-card-wide">
+              <header><span class="info-glyph">⚙</span><h3>Runtime</h3></header>
+              <dl class="info-grid" id="manageInfo">
+                <dt>Loading…</dt><dd></dd>
+              </dl>
+            </article>
+          </div>
+          <p class="info-foot" id="statDir"></p>
         </section>
 
         <section class="subtab-panel" data-subpanel="plugins">
@@ -2065,11 +2535,12 @@ async function loadManageInfo() {
       fetch("/api/info").then(r => r.ok ? r.json() : Promise.reject(r.status)),
       fetch("/api/stats").then(r => r.ok ? r.json() : Promise.reject(r.status)),
     ]);
+    // Populate the headline counters / by-source / by-kind cards too —
+    // they share #statTotal / #statBySource / etc. with the search-tab
+    // counterparts that no longer exist.
+    renderStats(stats);
+
     const rows = [
-      ["Total items",    (stats.total ?? 0).toLocaleString()],
-      ["Enriched",       (stats.enriched ?? 0).toLocaleString()],
-      ["Last sync",      stats.last_sync || "—"],
-      ["Bookmarks dir",  info.bookmarks_dir],
       ["Vector DB",      `${info.vector_db.type} · ${info.vector_db.persist_dir} · ${info.vector_db.collection}`],
       ["Embeddings",     `${info.embeddings.provider} · ${info.embeddings.provider === "openai" ? info.embeddings.openai_model : info.embeddings.local_model}`],
       ["LLM",            `${info.llm.provider}${info.llm.model ? " · " + info.llm.model : ""}`],
@@ -2310,33 +2781,8 @@ async function loadPluginTabs() {
 els.findInput.addEventListener("input", applyFilter);
 
 // ─── Advanced search wiring ────────────────────────────────────────
-
-function onAdvNumberChange(key, el) {
-  const v = el.value === "" ? null : Number(el.value);
-  state.adv[key] = Number.isFinite(v) ? v : null;
-  saveAdvToStorage();
-  refreshAdvBadge();
-  applyFilter();
-}
-
-function onAdvBoolChange(key, el) {
-  state.adv[key] = el.checked;
-  saveAdvToStorage();
-  refreshAdvBadge();
-  applyFilter();
-}
-
-els.advImpMin.addEventListener("input", () => onAdvNumberChange("impMin", els.advImpMin));
-els.advImpMax.addEventListener("input", () => onAdvNumberChange("impMax", els.advImpMax));
-els.advHasSummary.addEventListener("change", () => onAdvBoolChange("hasSummary", els.advHasSummary));
-els.advHasNotes.addEventListener("change", () => onAdvBoolChange("hasNotes", els.advHasNotes));
-els.advIncludeRemoved.addEventListener("change", () => onAdvBoolChange("includeRemoved", els.advIncludeRemoved));
-els.advSearch.addEventListener("toggle", saveAdvToStorage);
-els.advClear.addEventListener("click", (e) => {
-  e.preventDefault();
-  e.stopPropagation();
-  clearAdvFilters();
-});
+// All event handling lives in mountAdvancedSearch(); each tab mounts its own
+// instance and they update their own scope via notifyAdvChange(scope).
 
 els.fuzzyToggle.addEventListener("click", () => {
   state.fuzzy = !state.fuzzy;
@@ -2424,149 +2870,6 @@ function _rerenderAskSources() {
   }
   host.replaceChildren(frag);
 }
-
-// ─── Lists ─────────────────────────────────────────────────────────
-
-async function loadLists() {
-  try {
-    const r = await fetch("/api/lists");
-    if (!r.ok) return;
-    state.lists = await r.json();
-    renderListSuggestions();
-    renderListsSidebar();
-  } catch { /* optional */ }
-}
-
-function renderListSuggestions() {
-  if (!els.listSuggestions) return;
-  els.listSuggestions.innerHTML = state.lists
-    .map(l => `<option value="${escapeHtml(l.name)}">`).join("");
-}
-
-function renderListsSidebar() {
-  if (!els.statLists) return;
-  if (!state.lists.length) {
-    els.statLists.innerHTML = `<li class="bar-row"><div class="bar-label"><span>—</span></div></li>`;
-    return;
-  }
-  const max = state.lists.reduce((m, l) => Math.max(m, l.count || 0), 1);
-  const regular = state.lists.filter(l => !l.smart);
-  const smart   = state.lists.filter(l =>  l.smart);
-
-  const renderRow = (l) => {
-    const pct = Math.max(4, Math.round(((l.count || 0) / max) * 100));
-    const isActive = l.smart
-      ? state.activeSmartList?.name === l.name
-      : state.activeList === l.name;
-    const active = isActive ? " active" : "";
-    const icon = l.smart ? (l.icon || "⚡") : "📋";
-    const title = l.smart && l.description ? ` title="${escapeHtml(l.description)}"` : "";
-    const dataAttr = l.smart ? `data-smart="${escapeHtml(l.name)}"` : `data-list="${escapeHtml(l.name)}"`;
-    return `<li class="bar-row clickable${active}" ${dataAttr}${title}>
-      <div class="bar-fill" style="width:${pct}%"></div>
-      <div class="bar-label"><span>${icon} ${escapeHtml(l.name)}</span><b>${l.count || 0}</b></div>
-    </li>`;
-  };
-
-  let html = regular.map(renderRow).join("");
-  if (smart.length) {
-    html += `<li class="bar-row bar-divider"><div class="bar-label"><span class="muted">smart lists</span></div></li>`;
-    html += smart.map(renderRow).join("");
-  }
-  els.statLists.innerHTML = html;
-
-  els.statLists.querySelectorAll("li[data-list]").forEach(li => {
-    li.addEventListener("click", () => setActiveList(li.dataset.list));
-  });
-  els.statLists.querySelectorAll("li[data-smart]").forEach(li => {
-    li.addEventListener("click", () => setActiveSmartList(li.dataset.smart));
-  });
-}
-
-function setActiveList(name) {
-  // Activating a regular list clears any smart-list filter.
-  state.activeSmartList = null;
-  state.activeList = (state.activeList === name) ? null : name;
-  els.listFilterClear?.classList.toggle("hidden",
-    !state.activeList && !state.activeSmartList);
-  renderListsSidebar();
-  applyFilter();
-}
-
-function setActiveSmartList(name) {
-  state.activeList = null;
-  const spec = state.lists.find(l => l.smart && l.name === name) || null;
-  state.activeSmartList = (state.activeSmartList?.name === name) ? null : spec;
-  els.listFilterClear?.classList.toggle("hidden",
-    !state.activeList && !state.activeSmartList);
-  renderListsSidebar();
-  applyFilter();
-}
-
-function renderDetailLists(d) {
-  const lists = d.lists || [];
-  els.detailLists.innerHTML = lists.map(l =>
-    `<span class="tag list" data-list="${escapeHtml(l)}">📋 ${escapeHtml(l)} <button class="chip-x" title="Remove">×</button></span>`
-  ).join("") || `<span class="muted">— not in any list</span>`;
-  els.detailLists.querySelectorAll(".chip-x").forEach(btn => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const name = btn.closest("[data-list]").dataset.list;
-      removeFromList(name);
-    });
-  });
-}
-
-async function addToList(name) {
-  if (!state.currentId) return;
-  name = String(name || "").trim();
-  if (!name) return;
-  const current = state.detail?.lists || [];
-  if (current.includes(name)) return;
-  const next = [...current, name];
-  await saveLists(next);
-}
-
-async function removeFromList(name) {
-  if (!state.currentId) return;
-  const current = state.detail?.lists || [];
-  const next = current.filter(l => l !== name);
-  if (next.length === current.length) return;
-  await saveLists(next);
-}
-
-async function saveLists(next) {
-  try {
-    const r = await fetch(`/api/bookmarks/${state.currentId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lists: next }),
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    state.detail = await r.json();
-    // Patch the in-memory list too.
-    const i = state.all.findIndex(b => b.id === state.currentId);
-    if (i >= 0) state.all[i] = { ...state.all[i], lists: state.detail.lists };
-    renderDetailLists(state.detail);
-    renderResults();
-    loadLists();
-  } catch (err) {
-    showToast(`List update failed: ${err.message}`);
-  }
-}
-
-els.listAddForm?.addEventListener("submit", (e) => {
-  e.preventDefault();
-  const name = els.listAddInput.value.trim();
-  if (!name) return;
-  els.listAddInput.value = "";
-  addToList(name);
-});
-
-els.listFilterClear?.addEventListener("click", () => {
-  if (state.activeSmartList) setActiveSmartList(state.activeSmartList.name);
-  else if (state.activeList) setActiveList(state.activeList);
-});
 
 // ─── Add link ──────────────────────────────────────────────────────
 
@@ -2770,7 +3073,7 @@ window.addEventListener("hashchange", () => {
 });
 
 loadKinds();
-loadSchema().then(loadBookmarks).then(loadStats).then(loadLists).catch(err => {
+loadSchema().then(loadBookmarks).then(loadStats).catch(err => {
   els.count.textContent = `Error: ${err.message}`;
 });
 
@@ -4148,9 +4451,20 @@ async function refreshManageTasks() {
     host.innerHTML = `<p class="hint-text">No background tasks yet. Run a ✈️ exporter to create one.</p>`;
     return;
   }
+  // Preserve which rows the user has expanded so the 3-second polling
+  // re-render doesn't slam them shut while they're reading the log.
+  const expanded = new Set(
+    [...host.querySelectorAll(".task-row.expanded")].map(r => r.dataset.id)
+  );
+
   host.innerHTML = tasks.map(_renderTaskRow).join("");
   host.querySelectorAll(".task-row").forEach(row => {
     const id = row.dataset.id;
+    if (expanded.has(id)) {
+      row.classList.add("expanded");
+      const t = row.querySelector(".task-toggle");
+      if (t) t.textContent = "▾";
+    }
     row.querySelector(".task-toggle")?.addEventListener("click", () => {
       row.classList.toggle("expanded");
       const t = row.querySelector(".task-toggle");
@@ -4200,12 +4514,21 @@ function _renderTaskRow(t) {
   const logBlock = t.log
     ? `<pre class="task-log">${escapeHtml(t.log)}</pre>` : "";
 
+  // Prefer the user's chosen page_title (or root_folder for bookmark_file)
+  // so the row reads like the artifact, not like the plugin slug.
+  const userTitle = (t.options && (t.options.page_title || t.options.root_folder || "")).toString().trim();
+  const titleText = userTitle || t.exporter;
+  const exporterTag = userTitle
+    ? `<span class="task-meta task-exporter-tag">${escapeHtml(t.exporter)}</span>`
+    : "";
+
   return `
     <div class="task-row task-${STATUS.cls}" data-id="${t.id}">
       <div class="task-summary">
         <button class="task-toggle" type="button" aria-label="Toggle details">▸</button>
         <span class="task-status-icon">${STATUS.ico}</span>
-        <span class="task-exporter">${escapeHtml(t.exporter)}</span>
+        <span class="task-exporter">${escapeHtml(titleText)}</span>
+        ${exporterTag}
         <span class="task-meta">${escapeHtml(created)}</span>
         <span class="task-meta">${t.item_count} item${itemSuffix}</span>
         ${progressBar}

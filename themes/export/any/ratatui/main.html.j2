@@ -188,9 +188,15 @@ html, body {
   color: var(--dim); font-size: 12px;
   border-top: 1px dashed var(--border);
 }
-[dir="rtl"] body { text-align: right; }
-[dir="rtl"] .tui-row { direction: rtl; }
-[dir="rtl"] .tui-statusbar .right { margin-left: 0; margin-right: auto; }
+/* RTL: dir="rtl" on <html> already mirrors flexbox + text-align +
+   inputs. Tweaks:
+   - URL strings stay LTR via inline <bdi> in the template.
+   - The numeric "001" column stays LTR in any direction.
+   - The "[#tag]" pseudo-tags use a fixed LTR run via .tui-row-tags
+     below so brackets and "#" don't get split by RTL bidi. */
+[dir="rtl"] .tui-row-num,
+[dir="rtl"] .tui-row-tags,
+[dir="rtl"] .tui-row-imp { direction: ltr; unicode-bidi: isolate; }
 </style>
 </head>
 <body>
@@ -225,7 +231,7 @@ html, body {
               <a class="tui-row-title" href="{{ it.url }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
               {% if it.importance %}<span class="tui-row-imp">★{{ it.importance }}</span>{% else %}<span></span>{% endif %}
               {% if it.tags %}<span class="tui-row-tags">[{{ it.tags|join(' ') }}]</span>{% else %}<span></span>{% endif %}
-              <span class="tui-row-url">{{ it.url }}</span>
+              <span class="tui-row-url"><bdi>{{ it.url }}</bdi></span>
               {% if it.summary %}<span class="tui-row-summary">{{ it.summary }}</span>{% endif %}
             </li>
 {%- endfor %}
@@ -245,8 +251,8 @@ html, body {
   {% if show_search %}<span><span class="key">ESC</span> clear</span>{% endif %}
   <span><span class="key">F1</span> help</span>
   <span class="right">
-    <span>{{ item_count }} items</span>
-    <span>{{ generated_at }}</span>
+    <span><bdi>{{ item_count }} items</bdi></span>
+    <span><bdi>{{ generated_at }}</bdi></span>
   </span>
 </footer>
 
