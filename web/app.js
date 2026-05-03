@@ -2441,7 +2441,7 @@ Tabs.register({
           <button type="button" class="subtab" data-subtab="info">📊 General</button>
           <button type="button" class="subtab" data-subtab="plugins">🔌 Plugins</button>
           <button type="button" class="subtab" data-subtab="jobs">🔄 Sync &amp; Ingest</button>
-          <button type="button" class="subtab" data-subtab="tasks">✈️ Tasks</button>
+          <button type="button" class="subtab" data-subtab="tasks">⬇ Background Export</button>
           <button type="button" class="subtab" data-subtab="logs">📜 Logs</button>
         </nav>
 
@@ -4380,8 +4380,12 @@ async function runExport() {
       setTimeout(closeExport, 900);
     } else {
       const data = await r.json();
-      status.textContent = `Background task started (#${data.task_id}). See Manage › Tasks.`;
-      showToast("Background task queued — see Manage › Tasks");
+      status.textContent = `Background task started (#${data.task_id}). See Manage › Background Export.`;
+      showToast("Background task queued — see Manage › Background Export");
+      // Re-arm tasks polling if it had auto-stopped — there's a fresh
+      // task to watch now.
+      _tasksLastRunningAt = Date.now();
+      if (!_tasksPollTimer && _manageSubtab === "tasks") startTasksPoll();
       setTimeout(closeExport, 1400);
     }
   } catch (err) {
@@ -4532,14 +4536,28 @@ function _highlightYamlScalar(s) {
 }
 
 
-// ─── Manage › Tasks sub-tab ─────────────────────────────────────────
+// ─── Manage › Background Export sub-tab ────────────────────────────
+//
+// Polling is best-effort: once nothing has been in `status: running` for
+// 10 seconds, the timer auto-stops to save bandwidth + battery. The next
+// activation of the subtab kicks off polling again (one-shot refresh
+// runs unconditionally — that's how the user sees post-stop changes).
 
+const POLL_IDLE_TIMEOUT_MS = 10_000;
 let _tasksPollTimer = null;
+let _tasksLastRunningAt = 0;
 
 function startTasksPoll() {
   stopTasksPoll();
+  // Grace window so we don't auto-stop on the very first tick before any
+  // refreshes have observed running state.
+  _tasksLastRunningAt = Date.now();
   _tasksPollTimer = setInterval(() => {
-    if (_manageSubtab === "tasks") refreshManageTasks();
+    if (_manageSubtab !== "tasks") return;
+    refreshManageTasks();
+    if (Date.now() - _tasksLastRunningAt > POLL_IDLE_TIMEOUT_MS) {
+      stopTasksPoll();
+    }
   }, 3000);
 }
 function stopTasksPoll() {
@@ -4559,8 +4577,12 @@ async function refreshManageTasks() {
     return;
   }
   if (!tasks.length) {
-    host.innerHTML = `<p class="hint-text">No background tasks yet. Run a ✈️ exporter to create one.</p>`;
+    host.innerHTML = `<p class="hint-text">No background exports yet. Run a ✈️ exporter to create one.</p>`;
     return;
+  }
+  // Touchstone for the idle-stop heuristic: any task in flight resets it.
+  if (tasks.some(t => t.status === "running" || t.status === "pending")) {
+    _tasksLastRunningAt = Date.now();
   }
   // Preserve which rows the user has expanded so the 3-second polling
   // re-render doesn't slam them shut while they're reading the log.
@@ -4659,13 +4681,23 @@ function _renderTaskRow(t) {
 
 
 // ─── Manage › Sync & Ingest sub-tab ─────────────────────────────────
+//
+// Same idle-stop policy as the Background Export poll: if no job has
+// been running/pending for the last POLL_IDLE_TIMEOUT_MS, the timer
+// stops on its own. Hitting Run sync / Run ingest re-arms it.
 
 let _jobsPollTimer = null;
+let _jobsLastRunningAt = 0;
 
 function startJobsPoll() {
   stopJobsPoll();
+  _jobsLastRunningAt = Date.now();
   _jobsPollTimer = setInterval(() => {
-    if (_manageSubtab === "jobs") refreshManageJobs();
+    if (_manageSubtab !== "jobs") return;
+    refreshManageJobs();
+    if (Date.now() - _jobsLastRunningAt > POLL_IDLE_TIMEOUT_MS) {
+      stopJobsPoll();
+    }
   }, 1500);
 }
 function stopJobsPoll() {
@@ -4741,6 +4773,10 @@ async function runManageJob(kind) {
     }
     const data = await r.json();
     showToast(`Queued ${kind} (#${data.job_id})`);
+    // Re-arm polling if it had auto-stopped during an idle stretch — a
+    // freshly-queued job is, by definition, activity worth watching.
+    _jobsLastRunningAt = Date.now();
+    if (!_jobsPollTimer && _manageSubtab === "jobs") startJobsPoll();
     refreshManageJobs();
   } catch (e) {
     showToast(`Failed to queue ${kind}: ${e.message}`);
@@ -4767,6 +4803,10 @@ async function refreshManageJobs() {
   if (!jobs.length) {
     host.innerHTML = `<p class="hint-text">No jobs yet. Pick options above and hit Run.</p>`;
     return;
+  }
+  // Touchstone for the idle-stop heuristic.
+  if (jobs.some(j => j.status === "running" || j.status === "pending")) {
+    _jobsLastRunningAt = Date.now();
   }
 
   // Preserve which rows the user has expanded across polls.
