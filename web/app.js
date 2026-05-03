@@ -3646,6 +3646,7 @@ async function renderOptionsStep() {
   host.innerHTML = "";
   if (!schema.length) {
     host.innerHTML = `<p class="hint-text">No options for this exporter — click <strong>Run</strong> to export.</p>`;
+    _refreshOptionsValidity();
     return;
   }
   for (const opt of schema) {
@@ -3656,10 +3657,47 @@ async function renderOptionsStep() {
       kind: "opt",
       spec: opt,
       value: exportState.options[opt.name],
-      onChange: (val) => { exportState.options[opt.name] = val; },
+      onChange: (val) => {
+        exportState.options[opt.name] = val;
+        _refreshOptionsValidity();
+      },
     }));
   }
+  _refreshOptionsValidity();
 }
+
+// Per-exporter Next-button gate for the Options step. Returns null when
+// the form is valid, or a short reason string when it's not — caller
+// uses the reason for the Next button's tooltip + status line.
+function _optionsStepInvalidReason() {
+  const e = exportState.selectedExporter;
+  if (!e) return "Pick an exporter first.";
+  if (e.slug === "data") {
+    // Data exporter: the user must either keep "All fields" on, or
+    // pick at least one field from the multiselect.
+    const all = !!exportState.options.all_fields;
+    const fields = Array.isArray(exportState.options.fields)
+      ? exportState.options.fields : [];
+    if (!all && fields.length === 0) {
+      return "Pick at least one field, or check All fields.";
+    }
+  }
+  return null;
+}
+
+function _refreshOptionsValidity() {
+  if (exportState.step !== 2) return;
+  const next = document.getElementById("exportNextBtn");
+  const status = document.getElementById("exportStatus");
+  if (!next) return;
+  const reason = _optionsStepInvalidReason();
+  next.disabled = !!reason;
+  next.title = reason || "";
+  if (status && reason) status.textContent = reason;
+  else if (status && status.textContent === _lastInvalidStatus) status.textContent = "";
+  _lastInvalidStatus = reason || "";
+}
+let _lastInvalidStatus = "";
 
 function _renderField({ kind, spec, value, onChange }) {
   const wrap = document.createElement("div");
@@ -4406,6 +4444,11 @@ function _onExportNext() {
     status.textContent = "";
     exportState.step = 2;
   } else if (exportState.step === 2) {
+    const reason = _optionsStepInvalidReason();
+    if (reason) {
+      status.textContent = reason;
+      return;
+    }
     status.textContent = "";
     exportState.step = 3;
   } else if (exportState.step === 3) {
