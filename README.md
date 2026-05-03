@@ -35,41 +35,47 @@ Booki pulls items from **pluggable sources** — Chrome / Safari / Firefox bookm
 
 ## 📸 Screenshots
 
-A quick visual tour. Captions match the filenames in [`docs/screen/`](docs/screen/) — open any image to see it full-size.
+A quick visual tour — click any thumbnail to open it full-size. Captions
+match the filenames in [`docs/screen/`](docs/screen/).
 
-**Web UI**
-
-**web search**
-
-![web search](docs/screen/web%20search.gif)
-
-**web doctor**
-
-![web doctor](docs/screen/web%20doctor.png)
-
-**injest and sync web ui**
-
-![injest and sync web ui](docs/screen/injest%20and%20sync%20web%20ui.png)
-
-**export wizard**
-
-![export wizard](docs/screen/export%20wizard.png)
-
-**CLI**
-
-**browse in cli**
-
-![browse in cli](docs/screen/browse%20in%20cli.png)
-
-**autocomplete in cli**
-
-![autocomplete in cli](docs/screen/autocomplete%20in%20cli.gif)
-
-**Manager (menubar sidecar)**
-
-**manager tray app**
-
-![manager tray app](docs/screen/manager%20tray%20app.png)
+<!-- Inline HTML (instead of plain Markdown images) so the thumbnails sit
+side-by-side and clicks open the full-size asset. GitHub renders this. -->
+<table>
+<tr>
+<td align="center" width="33%">
+  <a href="docs/screen/web%20search.gif"><img src="docs/screen/web%20search.gif" width="100%" alt="web search"></a><br>
+  <sub><b>web search</b></sub>
+</td>
+<td align="center" width="33%">
+  <a href="docs/screen/web%20doctor.png"><img src="docs/screen/web%20doctor.png" width="100%" alt="web doctor"></a><br>
+  <sub><b>web doctor</b></sub>
+</td>
+<td align="center" width="33%">
+  <a href="docs/screen/injest%20and%20sync%20web%20ui.png"><img src="docs/screen/injest%20and%20sync%20web%20ui.png" width="100%" alt="injest and sync web ui"></a><br>
+  <sub><b>injest and sync web ui</b></sub>
+</td>
+</tr>
+<tr>
+<td align="center" width="33%">
+  <a href="docs/screen/export%20wizard.png"><img src="docs/screen/export%20wizard.png" width="100%" alt="export wizard"></a><br>
+  <sub><b>export wizard</b></sub>
+</td>
+<td align="center" width="33%">
+  <a href="docs/screen/browse%20in%20cli.png"><img src="docs/screen/browse%20in%20cli.png" width="100%" alt="browse in cli"></a><br>
+  <sub><b>browse in cli</b></sub>
+</td>
+<td align="center" width="33%">
+  <a href="docs/screen/autocomplete%20in%20cli.gif"><img src="docs/screen/autocomplete%20in%20cli.gif" width="100%" alt="autocomplete in cli"></a><br>
+  <sub><b>autocomplete in cli</b></sub>
+</td>
+</tr>
+<tr>
+<td align="center" colspan="3">
+  <a href="docs/screen/manager%20tray%20app.png"><img src="docs/screen/manager%20tray%20app.png" width="33%" alt="manager tray app"></a><br>
+  <sub><b>manager tray app</b></sub>
+</td>
+</tr>
+</table>
 
 ---
 
