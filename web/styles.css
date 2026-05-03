@@ -13,6 +13,10 @@
   --text-faint: #6b7385;
   --accent: #8b5cf6;
   --accent-2: #06b6d4;
+  /* Darker shade of --accent used as the *active* state on toggle/run
+     buttons. The lighter --accent looks great as a chip but doesn't give
+     dark labels enough contrast — this brings them up to ~AA at body size. */
+  --accent-strong: #6d28d9;
   --warn: #f59e0b;
   --danger: #ef4444;
   --ok: #22c55e;
@@ -182,10 +186,11 @@ a:hover { text-decoration: underline; }
 .view-btn:last-child { border-right: none; }
 .view-btn:hover { color: var(--text); background: var(--panel); }
 .view-btn.active {
-  background: var(--accent);
-  color: var(--bg);
+  background: var(--accent-strong);
+  color: #fff;
+  font-weight: 600;
 }
-.view-btn.active:hover { background: var(--accent); color: var(--bg); }
+.view-btn.active:hover { background: var(--accent-strong); color: #fff; }
 .view-glyph { font-size: 13px; }
 .view-label { font-size: 11px; }
 
@@ -1096,8 +1101,9 @@ a:hover { text-decoration: underline; }
 .adv-dir-btn:hover { color: var(--text); }
 .adv-dir-btn + .adv-dir-btn { border-left: 1px solid var(--border); }
 .adv-dir-btn.on {
-  background: var(--accent);
-  color: var(--bg);
+  background: var(--accent-strong);
+  color: #fff;
+  font-weight: 600;
 }
 .adv-row .adv-top-count {
   width: 70px;
@@ -2836,18 +2842,17 @@ body.refine-dragging .tree .tree { padding-top: 2px; padding-bottom: 2px; }
    rule above without resorting to !important. */
 .btn.primary.job-run-btn {
   align-self: flex-start;
-  background: var(--accent);
-  border: 1px solid var(--accent);
-  /* Pure black reads punchier on the purple than --bg's dark blue tint. */
-  color: #000;
+  background: var(--accent-strong);
+  border: 1px solid var(--accent-strong);
+  color: #fff;
   border-radius: 6px;
   padding: 6px 14px;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
 }
 .btn.primary.job-run-btn:hover {
   filter: brightness(1.1);
-  border-color: var(--accent);
+  border-color: var(--accent-strong);
 }
 
 .job-args code {
