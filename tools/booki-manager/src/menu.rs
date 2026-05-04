@@ -1,6 +1,6 @@
 use crate::state::{AppState, Status};
 use anyhow::Result;
-use tray_icon::menu::{Menu, MenuId, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
 /// Three-state LED color used as the menubar icon.
@@ -35,11 +35,19 @@ pub struct Items {
     pub status: MenuItem,
     pub last: MenuItem,
     pub schedule_info: MenuItem,
+    pub booki_info: MenuItem,
     pub sync_now: MenuItem,
     pub ingest_now: MenuItem,
     pub pause: MenuItem,
     pub pause_schedule: MenuItem,
+    /// "Open Booki web UI" — lives inside the Web interface submenu now.
     pub open_web: MenuItem,
+    /// Web-interface submenu entries — each separately addressable so
+    /// MenuEvent fires its dedicated id.
+    pub web_start: MenuItem,
+    pub web_stop: MenuItem,
+    pub web_restart: MenuItem,
+    pub pick_booki: MenuItem,
     pub autostart: MenuItem,
     pub quit: MenuItem,
 }
@@ -55,24 +63,43 @@ pub fn build() -> Result<Tray> {
     let status = MenuItem::with_id(MenuId::new("status"), "Status: idle", false, None);
     let last = MenuItem::with_id(MenuId::new("last"), "No syncs yet", false, None);
     let schedule_info = MenuItem::with_id(MenuId::new("schedule_info"), "Schedule: off", false, None);
+    let booki_info = MenuItem::with_id(MenuId::new("booki_info"), "Booki: ?", false, None);
     let sync_now = MenuItem::with_id(MenuId::new("sync_now"), "Sync now", true, None);
     let ingest_now = MenuItem::with_id(MenuId::new("ingest_now"), "Ingest now", true, None);
     let pause = MenuItem::with_id(MenuId::new("pause"), "Pause watching", true, None);
     let pause_schedule = MenuItem::with_id(MenuId::new("pause_schedule"), "Pause scheduled jobs", true, None);
+
+    // Web-interface submenu — Open + Start / Stop / Restart for the Python
+    // server. Each item carries its own id; refresh() flips Start/Stop
+    // disabled state based on whether the server is currently running.
     let open_web = MenuItem::with_id(MenuId::new("open_web"), "Open Booki web UI", true, None);
+    let web_start = MenuItem::with_id(MenuId::new("web_start"), "Start", true, None);
+    let web_stop = MenuItem::with_id(MenuId::new("web_stop"), "Stop", true, None);
+    let web_restart = MenuItem::with_id(MenuId::new("web_restart"), "Restart", true, None);
+    let web_submenu = Submenu::new("Web interface", true);
+    web_submenu.append(&open_web)?;
+    web_submenu.append(&PredefinedMenuItem::separator())?;
+    web_submenu.append(&web_start)?;
+    web_submenu.append(&web_stop)?;
+    web_submenu.append(&web_restart)?;
+
+    let pick_booki = MenuItem::with_id(MenuId::new("pick_booki"), "Pick Booki folder…", true, None);
     let autostart = MenuItem::with_id(MenuId::new("autostart"), "Launch at login", true, None);
     let quit = MenuItem::with_id(MenuId::new("quit"), "Quit Booki Manager", true, None);
 
     menu.append(&status)?;
     menu.append(&last)?;
     menu.append(&schedule_info)?;
+    menu.append(&booki_info)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&sync_now)?;
     menu.append(&ingest_now)?;
     menu.append(&pause)?;
     menu.append(&pause_schedule)?;
     menu.append(&PredefinedMenuItem::separator())?;
-    menu.append(&open_web)?;
+    menu.append(&web_submenu)?;
+    menu.append(&PredefinedMenuItem::separator())?;
+    menu.append(&pick_booki)?;
     menu.append(&autostart)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&quit)?;
@@ -86,10 +113,11 @@ pub fn build() -> Result<Tray> {
     Ok(Tray {
         icon,
         items: Items {
-            status, last, schedule_info,
+            status, last, schedule_info, booki_info,
             sync_now, ingest_now,
             pause, pause_schedule,
-            open_web, autostart, quit,
+            open_web, web_start, web_stop, web_restart,
+            pick_booki, autostart, quit,
         },
     })
 }
@@ -127,6 +155,26 @@ pub fn refresh(items: &Items, st: &AppState) {
         format!("Schedule: {}", st.schedule_summary)
     };
     items.schedule_info.set_text(&sched_label);
+
+    // Show the basename of the active Booki path (full path is too wide
+    // for a tray menu item). Tooltip / hover would be nicer but tray-icon
+    // doesn't expose that for menu items.
+    let booki_label = if st.booki_home.as_os_str().is_empty() {
+        "Booki: not set".to_string()
+    } else {
+        let basename = st.booki_home.file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| st.booki_home.to_string_lossy().into_owned());
+        format!("Booki: {}", basename)
+    };
+    items.booki_info.set_text(&booki_label);
+
+    // Web-interface submenu: only enable the action that makes sense for
+    // the current server state.
+    let server_up = matches!(st.status, Status::Idle | Status::Syncing);
+    items.web_start.set_enabled(!server_up);
+    items.web_stop.set_enabled(server_up);
+    items.web_restart.set_enabled(server_up);
 }
 
 /// Render a small filled-circle "LED" in the requested color. Anti-aliased

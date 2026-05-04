@@ -3,6 +3,7 @@ use booki_manager::config::AppConfig;
 use booki_manager::paths::{booki_root, Source};
 use booki_manager::schedule::Scheduler;
 use booki_manager::server::ServerProc;
+use booki_manager::settings;
 use booki_manager::state::{AppState, LastSync, Shared, Status};
 use booki_manager::{autostart, menu, server, state, watcher};
 use anyhow::{Context, Result};
@@ -48,6 +49,8 @@ fn main() -> Result<()> {
             st.lock().unwrap().autostart = au.enabled();
         }
     }
+    // Surface the resolved Booki path in the tray menu.
+    state.lock().unwrap().booki_home = root.clone();
 
     // Scheduler: parses [manager.schedule.*] from the same config.toml,
     // persists last_run under the platform state dir.
@@ -150,11 +153,16 @@ fn main() -> Result<()> {
         status:         tray.items.status.id().0.clone(),
         last:           tray.items.last.id().0.clone(),
         schedule_info:  tray.items.schedule_info.id().0.clone(),
+        booki_info:     tray.items.booki_info.id().0.clone(),
         sync_now:       tray.items.sync_now.id().0.clone(),
         ingest_now:     tray.items.ingest_now.id().0.clone(),
         pause:          tray.items.pause.id().0.clone(),
         pause_schedule: tray.items.pause_schedule.id().0.clone(),
         open_web:       tray.items.open_web.id().0.clone(),
+        web_start:      tray.items.web_start.id().0.clone(),
+        web_stop:       tray.items.web_stop.id().0.clone(),
+        web_restart:    tray.items.web_restart.id().0.clone(),
+        pick_booki:     tray.items.pick_booki.id().0.clone(),
         autostart:      tray.items.autostart.id().0.clone(),
         quit:           tray.items.quit.id().0.clone(),
     };
@@ -170,11 +178,16 @@ fn main() -> Result<()> {
             status: tray.items.status,
             last: tray.items.last,
             schedule_info: tray.items.schedule_info,
+            booki_info: tray.items.booki_info,
             sync_now: tray.items.sync_now,
             ingest_now: tray.items.ingest_now,
             pause: tray.items.pause,
             pause_schedule: tray.items.pause_schedule,
             open_web: tray.items.open_web,
+            web_start: tray.items.web_start,
+            web_stop: tray.items.web_stop,
+            web_restart: tray.items.web_restart,
+            pick_booki: tray.items.pick_booki,
             autostart: tray.items.autostart,
             icon: tray.icon,
         },
@@ -196,11 +209,16 @@ struct MenuIds {
     #[allow(dead_code)] status: String,
     #[allow(dead_code)] last: String,
     #[allow(dead_code)] schedule_info: String,
+    #[allow(dead_code)] booki_info: String,
     sync_now: String,
     ingest_now: String,
     pause: String,
     pause_schedule: String,
     open_web: String,
+    web_start: String,
+    web_stop: String,
+    web_restart: String,
+    pick_booki: String,
     autostart: String,
     quit: String,
 }
@@ -209,11 +227,16 @@ struct ItemsView {
     status: tray_icon::menu::MenuItem,
     last: tray_icon::menu::MenuItem,
     schedule_info: tray_icon::menu::MenuItem,
+    booki_info: tray_icon::menu::MenuItem,
     #[allow(dead_code)] sync_now: tray_icon::menu::MenuItem,
     #[allow(dead_code)] ingest_now: tray_icon::menu::MenuItem,
     pause: tray_icon::menu::MenuItem,
     pause_schedule: tray_icon::menu::MenuItem,
     #[allow(dead_code)] open_web: tray_icon::menu::MenuItem,
+    web_start: tray_icon::menu::MenuItem,
+    web_stop: tray_icon::menu::MenuItem,
+    web_restart: tray_icon::menu::MenuItem,
+    #[allow(dead_code)] pick_booki: tray_icon::menu::MenuItem,
     autostart: tray_icon::menu::MenuItem,
     icon: tray_icon::TrayIcon,
 }
@@ -328,6 +351,38 @@ fn handle_menu_click(
         let _ = srv.ensure_running(&s.client);
         drop(srv);
         let _ = server::url_in_browser(&s.cfg.web_base());
+    } else if id == ids.web_start {
+        let mut srv = s.server.lock().unwrap();
+        match srv.ensure_running(&s.client) {
+            Ok(()) => {
+                drop(srv);
+                s.state.lock().unwrap().status = Status::Idle;
+            }
+            Err(e) => {
+                log::warn!("web_start: {}", e);
+                drop(srv);
+                s.state.lock().unwrap().status = Status::ServerDown;
+            }
+        }
+    } else if id == ids.web_stop {
+        s.server.lock().unwrap().shutdown();
+        s.state.lock().unwrap().status = Status::ServerDown;
+    } else if id == ids.web_restart {
+        let mut srv = s.server.lock().unwrap();
+        srv.shutdown();
+        match srv.ensure_running(&s.client) {
+            Ok(()) => {
+                drop(srv);
+                s.state.lock().unwrap().status = Status::Idle;
+            }
+            Err(e) => {
+                log::warn!("web_restart: {}", e);
+                drop(srv);
+                s.state.lock().unwrap().status = Status::ServerDown;
+            }
+        }
+    } else if id == ids.pick_booki {
+        handle_pick_booki(s);
     } else if id == ids.autostart {
         if let Ok(au) = autostart::Autostart::new() {
             let now = !au.enabled();
@@ -341,6 +396,59 @@ fn handle_menu_click(
         // info-only items — disabled, but tray-icon may still emit events.
     }
     refresh_items(&s.items, &s.state.lock().unwrap());
+}
+
+/// Handle the "Pick Booki folder…" menu click. MVP scope: validate the
+/// folder, persist it to settings, and prompt the user to relaunch the
+/// manager — re-binding the watcher and config in-flight is brittle
+/// enough that a clean restart is the safer default.
+fn handle_pick_booki(s: &AppLoopShared) {
+    let initial = s.state.lock().unwrap().booki_home.clone();
+    let mut dlg = rfd::FileDialog::new().set_title("Pick a Booki folder");
+    if initial.exists() {
+        if let Some(parent) = initial.parent() { dlg = dlg.set_directory(parent); }
+    }
+    let Some(picked) = dlg.pick_folder() else { return; };
+
+    if !settings::looks_like_booki(&picked) {
+        log::warn!("picked path is not a Booki checkout: {}", picked.display());
+        rfd::MessageDialog::new()
+            .set_title("Not a Booki folder")
+            .set_description(&format!(
+                "{} doesn't look like a Booki checkout — expected a `booki` script and a `config.toml` next to each other.",
+                picked.display()
+            ))
+            .set_level(rfd::MessageLevel::Warning)
+            .show();
+        return;
+    }
+
+    let mut next = settings::load();
+    next.booki_home = Some(picked.clone());
+    if let Err(e) = settings::save(&next) {
+        log::error!("save settings: {}", e);
+        rfd::MessageDialog::new()
+            .set_title("Couldn't save settings")
+            .set_description(&format!("{}", e))
+            .set_level(rfd::MessageLevel::Error)
+            .show();
+        return;
+    }
+
+    log::info!("booki_home set to {}", picked.display());
+    // Update the displayed path immediately so the user sees the change
+    // even before they relaunch.
+    s.state.lock().unwrap().booki_home = picked.clone();
+    refresh_items(&s.items, &s.state.lock().unwrap());
+
+    rfd::MessageDialog::new()
+        .set_title("Saved")
+        .set_description(&format!(
+            "Booki folder set to:\n{}\n\nQuit and relaunch Booki Manager to switch fully — the running Python server is still bound to the previous folder.",
+            picked.display()
+        ))
+        .set_level(rfd::MessageLevel::Info)
+        .show();
 }
 
 fn kick_sync_source(s: &AppLoopShared, src: Source) {
@@ -452,6 +560,22 @@ fn refresh_items(items: &ItemsView, st: &AppState) {
         "Pause scheduled jobs"
     });
     items.autostart.set_text(if st.autostart { "Launch at login ✓" } else { "Launch at login" });
+
+    let booki_label = if st.booki_home.as_os_str().is_empty() {
+        "Booki: not set".to_string()
+    } else {
+        let basename = st.booki_home.file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| st.booki_home.to_string_lossy().into_owned());
+        format!("Booki: {}", basename)
+    };
+    items.booki_info.set_text(&booki_label);
+
+    // Web-interface submenu reflects the current server state.
+    let server_up = matches!(st.status, Status::Idle | Status::Syncing);
+    items.web_start.set_enabled(!server_up);
+    items.web_stop.set_enabled(server_up);
+    items.web_restart.set_enabled(server_up);
 
     let color = booki_manager::menu::LedColor::from_state(st);
     let _ = items.icon.set_icon(Some(booki_manager::menu::led_icon(color)));

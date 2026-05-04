@@ -210,7 +210,9 @@ After sourcing, drop the leading `./` — `booki sync`, `booki chat "..."`, etc.
 
 ## 🖥️ booki-manager (menubar sidecar)
 
-A small, native macOS / Linux menubar app written in Rust. It lives next to your clock, watches the browser bookmark files for changes, and runs `booki sync` / `booki ingest` on a schedule so you never have to remember to. From the tray menu you can also trigger **Sync now** / **Ingest now**, open the web UI, and toggle autostart.
+A small, native macOS / Linux menubar app written in Rust. It lives next to your clock, watches the browser bookmark files for changes, and runs `booki sync` / `booki ingest` on a schedule so you never have to remember to. From the tray menu you can also trigger **Sync now** / **Ingest now**, control the **Web interface** (Open / Start / Stop / Restart), pick which Booki folder to talk to (so the same manager can switch between a dev clone and your installed copy), and toggle autostart.
+
+The active Booki path is resolved in priority order: `$BOOKI_HOME` → the path you picked from the tray (`~/.config/booki-manager/settings.json`) → current working directory. The middle slot is what makes autostart work — login items don't inherit shell env, so `BOOKI_HOME` from your `~/.zshrc` isn't available; the saved setting is.
 
 ```bash
 cd tools/booki-manager

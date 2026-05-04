@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +29,10 @@ pub struct AppState {
     /// Cached human-friendly summary of the configured schedule, refreshed
     /// at startup. Shown in the menu so the user can see what's scheduled.
     pub schedule_summary: String,
+    /// Currently-active Booki checkout (resolved by `paths::booki_root`).
+    /// Surfaced in the tray menu so the user can see which one the
+    /// manager is talking to.
+    pub booki_home: PathBuf,
 }
 
 impl AppState {
@@ -39,6 +44,7 @@ impl AppState {
             paused_schedule: false,
             autostart: false,
             schedule_summary: String::new(),
+            booki_home: PathBuf::new(),
         }
     }
 }

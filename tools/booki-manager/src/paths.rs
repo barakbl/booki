@@ -120,12 +120,30 @@ pub fn is_relevant_change(path: &std::path::Path, source: Source) -> bool {
     }
 }
 
-/// Locate Booki's project root: prefer `$BOOKI_HOME`, else fall back to the
-/// current working directory. The Python `booki` script is expected to live
-/// at `<root>/booki`.
+/// Locate Booki's project root in priority order:
+///
+///   1. `$BOOKI_HOME` env var       — power-user override
+///   2. `settings::Settings::booki_home`  — what the user picked from the tray
+///                                          (and what autostart paths use,
+///                                          since they have no shell env)
+///   3. `std::env::current_dir()`   — last-resort fallback
+///
+/// The Python `booki` script is expected to live at `<root>/booki`.
 pub fn booki_root() -> Result<PathBuf> {
     if let Ok(v) = std::env::var("BOOKI_HOME") {
-        return Ok(PathBuf::from(v));
+        if !v.is_empty() {
+            return Ok(PathBuf::from(v));
+        }
+    }
+    let s = crate::settings::load();
+    if let Some(p) = s.booki_home {
+        if p.exists() {
+            return Ok(p);
+        }
+        log::warn!(
+            "settings.booki_home points at {} but it's gone — falling back to CWD",
+            p.display()
+        );
     }
     Ok(std::env::current_dir()?)
 }

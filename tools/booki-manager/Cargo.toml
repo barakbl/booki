@@ -26,6 +26,9 @@ anyhow = "1"
 crossbeam-channel = "0.5"
 image = { version = "0.25", default-features = false, features = ["png"] }
 jiff = "0.2"
+# Native folder picker for the "Pick Booki folder…" tray item. Default
+# features give NSOpenPanel on macOS, GTK3 on Linux, Win32 on Windows.
+rfd = "0.15"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
