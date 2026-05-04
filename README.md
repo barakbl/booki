@@ -34,7 +34,7 @@ Booki pulls items from **pluggable sources** — Chrome / Safari / Firefox bookm
 
 - **📤 Pluggable exporters** — themed HTML page, offline ZIP (full pages + PDFs + videos), data dumps (CSV / JSON / YAML / Markdown), photo galleries, browser-importable bookmarks file.
 
-- **🎨 Themes + color schemes** — `basic`, `ratatui`, `fun`. Catppuccin and Tokyo Night palettes baked in; per-theme thumbnail mocks.
+- **🎨 Three themes out of the box** — **basic** (clean and readable), **ratatui** (homage to the terminal — monospace + ASCII box borders), **fun** (because it's fun — Comic Sans, rainbow gradients, tilted cards). Catppuccin and Tokyo Night palettes baked in.
 
 - **🖥️ Menubar sidecar** — Rust `booki-manager` runs sync / ingest on a schedule, with `[manager.sync]` flags in `config.toml`.
 
