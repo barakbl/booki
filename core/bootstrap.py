@@ -32,6 +32,14 @@ from .doctor import Style
 
 _PROJECT_ROOT  = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = _PROJECT_ROOT / "config.toml"
+# The Rust booki-manager reads this same file to find the active Booki
+# checkout. Keeping the path in sync here means autostart-launched
+# managers (which don't inherit shell env, so $BOOKI_HOME is empty) just
+# work after `booki bootstrap`.
+MANAGER_SETTINGS = (
+    Path(os.environ.get("XDG_CONFIG_HOME") or "~/.config").expanduser()
+    / "booki-manager" / "settings.json"
+)
 
 
 # ─── Prompter ─────────────────────────────────────────────────────────────────
@@ -187,6 +195,14 @@ class BootstrapAnswers:
     # sources — name → enabled?
     sources_enabled: dict[str, bool] = field(default_factory=dict)
 
+    # booki-manager (menubar sidecar). When `manager_setup` is True,
+    # bootstrap also writes ~/.config/booki-manager/settings.json so the
+    # tray app finds this checkout without depending on $BOOKI_HOME.
+    manager_setup:        bool = True
+    manager_booki_home:   str  = ""    # filled in by _ask_manager
+    manager_enrich:       bool = True
+    manager_enrich_meta:  bool = True
+
 
 # ─── Sections ─────────────────────────────────────────────────────────────────
 
@@ -315,6 +331,42 @@ def _ask_web(p: Prompter, ans: BootstrapAnswers) -> None:
         pass
 
 
+def _ask_manager(p: Prompter, ans: BootstrapAnswers) -> None:
+    """Optional menubar-sidecar setup. Writes ~/.config/booki-manager/settings.json
+    so autostart-launched tray apps find this checkout — they can't rely on
+    $BOOKI_HOME because login items don't inherit shell env."""
+    p.header("🖥️ ", "Manager (menubar sidecar)",
+             "Optional Rust tray app that watches your bookmarks and runs sync/ingest on a schedule.")
+
+    ans.manager_setup = p.yes_no(
+        "Set up booki-manager?",
+        default=True,
+    )
+    if not ans.manager_setup:
+        return
+
+    # Default the manager's Booki home to wherever the config we're writing
+    # lives — that's almost always the right answer (the user is bootstrapping
+    # *for* that checkout). Fall back to PWD when the parent isn't a checkout.
+    parent = ans.output_path.parent
+    default_home = parent if (parent / "booki").is_file() else Path.cwd()
+    ans.manager_booki_home = p.text(
+        "Booki home for the manager",
+        str(default_home),
+        help="The directory containing the `booki` script and config.toml. "
+             "The manager reads this from settings.json to survive autostart "
+             "(login items don't inherit $BOOKI_HOME from your shell).",
+    )
+    ans.manager_enrich = p.yes_no(
+        "Run --enrich on every manager-triggered sync?",
+        default=True,
+    )
+    ans.manager_enrich_meta = p.yes_no(
+        "Run --enrich-meta (plugin enrichers: github / photo / document / …)?",
+        default=True,
+    )
+
+
 def _ask_sources(p: Prompter, ans: BootstrapAnswers) -> None:
     p.header("🔌", "Sources", "Pick which built-in plugins to enable. You can flip these any time later.")
 
@@ -352,6 +404,34 @@ def _quote(s: str) -> str:
                 .replace("\n", "\\n")
                 .replace("\t", "\\t"))
     return f"\"{escaped}\""
+
+
+def _render_manager_section(a: BootstrapAnswers) -> str:
+    """Emit the [manager.sync] block when the user opted into manager setup.
+    Returns empty when they skipped — keeps the file clean for users who
+    don't want the tray app."""
+    if not a.manager_setup:
+        return ""
+    enrich = "true" if a.manager_enrich else "false"
+    enrich_meta = "true" if a.manager_enrich_meta else "false"
+    return (
+        "\n# ─── booki-manager (menubar sidecar) ─────────────────────────────\n"
+        "# Flags the Rust tray app appends to every `booki sync` it triggers\n"
+        "# (manual 'Sync now' + the schedule below). Both default to true.\n"
+        "[manager.sync]\n"
+        f"enrich      = {enrich}\n"
+        f"enrich-meta = {enrich_meta}\n"
+        "\n"
+        "# Optional periodic jobs — uncomment and set a cadence to enable.\n"
+        "# A job fires when *both* the cadence elapsed and we're inside the\n"
+        "# window (or the window already ended today, for catch-up).\n"
+        "# [manager.schedule.sync]\n"
+        "# cadence = \"daily\"             # off | daily | weekly\n"
+        "# window  = \"02:00-05:00\"       # local time; wraps midnight if end <= start\n"
+        "# [manager.schedule.ingest]\n"
+        "# cadence = \"weekly\"\n"
+        "# window  = \"03:00-05:00\"\n"
+    )
 
 
 def _render_toml(ans: BootstrapAnswers) -> str:
@@ -480,7 +560,7 @@ sub_langs        = "en.*"
 configs_dir   = "./exports/configs"
 artifacts_dir = "./exports/artifacts"
 themes_dir    = "./themes"
-"""
+{_render_manager_section(a)}"""
 
 
 # ─── Summary + write ──────────────────────────────────────────────────────────
@@ -505,6 +585,15 @@ def _print_summary(p: Prompter, ans: BootstrapAnswers) -> None:
     print(f"     {s.dim('Sources on  ')}  {s.green(', '.join(enabled)) if enabled else s.dim('(none)')}")
     if disabled:
         print(f"     {s.dim('Sources off ')}  {s.dim(', '.join(disabled))}")
+    if ans.manager_setup:
+        flags = []
+        if ans.manager_enrich:      flags.append("--enrich")
+        if ans.manager_enrich_meta: flags.append("--enrich-meta")
+        flag_label = " ".join(flags) if flags else "(no enrichment flags)"
+        print(f"     {s.dim('Manager     ')}  {ans.manager_booki_home}  "
+              f"{s.dim('· ' + flag_label)}")
+    else:
+        print(f"     {s.dim('Manager     ')}  {s.dim('skipped')}")
     print()
 
 
@@ -515,6 +604,37 @@ def _write_config(path: Path, content: str) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(content, encoding="utf-8")
     tmp.replace(path)
+
+
+def _write_manager_settings(ans: BootstrapAnswers) -> Optional[Path]:
+    """Write ~/.config/booki-manager/settings.json so the tray app finds
+    this Booki checkout without depending on $BOOKI_HOME. Returns the
+    path it wrote to, or None when the user skipped manager setup.
+
+    Merges with any existing settings — the manager may grow other
+    fields later, and bootstrap shouldn't clobber them just because
+    `booki_home` is the only one we know about today.
+    """
+    if not ans.manager_setup:
+        return None
+
+    import json
+
+    booki_home = Path(ans.manager_booki_home).expanduser().resolve()
+    MANAGER_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+
+    existing: dict = {}
+    if MANAGER_SETTINGS.exists():
+        try:
+            existing = json.loads(MANAGER_SETTINGS.read_text(encoding="utf-8")) or {}
+        except (OSError, ValueError):
+            existing = {}
+    existing["booki_home"] = str(booki_home)
+
+    tmp = MANAGER_SETTINGS.with_suffix(MANAGER_SETTINGS.suffix + ".tmp")
+    tmp.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(MANAGER_SETTINGS)
+    return MANAGER_SETTINGS
 
 
 def _print_next_steps(p: Prompter, ans: BootstrapAnswers) -> None:
@@ -550,6 +670,14 @@ def _print_next_steps(p: Prompter, ans: BootstrapAnswers) -> None:
         print(f"  {s.yellow('⚠ remember to pass --config ' + str(ans.output_path))}"
               f"{s.dim(' to every booki command, or set BOOKI_CONFIG.')}")
 
+    if ans.manager_setup:
+        print()
+        print(f"  {s.bold('Manager build')}")
+        print(f"     {s.cyan('→')} {s.bold('cd tools/booki-manager && cargo build --release')}")
+        print(f"        {s.dim('binary lands at target/release/booki-manager')}")
+        print(f"     {s.cyan('→')} {s.bold('./target/release/booki-manager')}")
+        print(f"        {s.dim('then enable Launch at login from the tray menu for autostart')}")
+
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
@@ -572,6 +700,7 @@ def run(*, color: bool, requested_output: Optional[Path]) -> int:
     _ask_llm(p, ans)
     _ask_web(p, ans)
     _ask_sources(p, ans)
+    _ask_manager(p, ans)
 
     _print_summary(p, ans)
     if not p.yes_no("Write this config?", default=True):
@@ -591,6 +720,17 @@ def run(*, color: bool, requested_output: Optional[Path]) -> int:
     print()
     print(f"  {s.green('✓ wrote ' + str(ans.output_path))}  "
           f"{s.dim(f'({len(content):,} bytes)')}")
+
+    # Manager settings file is optional — only write when the user opted in.
+    try:
+        mgr_path = _write_manager_settings(ans)
+    except OSError as e:
+        print(f"  {s.yellow(f'⚠ manager settings: {e}')}")
+        mgr_path = None
+    if mgr_path is not None:
+        print(f"  {s.green('✓ wrote ' + str(mgr_path))}  "
+              f"{s.dim('(booki_home → ' + ans.manager_booki_home + ')')}")
+
     _print_next_steps(p, ans)
     print()
     return 0
