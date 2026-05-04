@@ -41,6 +41,27 @@ impl Client {
             .is_ok()
     }
 
+    /// Ask the running server to shut down cleanly. Used by the tray
+    /// menu's Stop / Restart so the manager can stop *adopted* servers
+    /// (started outside the manager) — there's no Child handle for
+    /// those, so SIGKILL via `Child::kill` doesn't apply.
+    pub fn shutdown(&self) -> Result<()> {
+        // The server replies OK and *then* exits, so the connection may
+        // close mid-response — treat that as success. Short timeout so
+        // a hung worker doesn't hold up the menu.
+        let res = ureq::post(&format!("{}/api/shutdown", self.base))
+            .timeout(Duration::from_secs(2))
+            .call();
+        match res {
+            Ok(_) => Ok(()),
+            // Connection closed mid-response is expected during shutdown.
+            Err(ureq::Error::Transport(t))
+                if matches!(t.kind(),
+                    ureq::ErrorKind::Io | ureq::ErrorKind::ConnectionFailed) => Ok(()),
+            Err(e) => Err(anyhow!("api shutdown: {}", e)),
+        }
+    }
+
     /// Submit a sync job. Returns the job id.
     pub fn submit_sync(&self, source: &str) -> Result<String> {
         self.submit_job("sync", &["--source".into(), source.into()])

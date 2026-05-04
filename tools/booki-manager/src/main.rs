@@ -328,7 +328,7 @@ fn handle_menu_click(
 ) {
     if id == ids.quit {
         log::info!("quit requested");
-        s.server.lock().unwrap().shutdown();
+        s.server.lock().unwrap().shutdown(&s.client);
         *control_flow = ControlFlow::Exit;
         return;
     }
@@ -365,11 +365,11 @@ fn handle_menu_click(
             }
         }
     } else if id == ids.web_stop {
-        s.server.lock().unwrap().shutdown();
+        s.server.lock().unwrap().shutdown(&s.client);
         s.state.lock().unwrap().status = Status::ServerDown;
     } else if id == ids.web_restart {
         let mut srv = s.server.lock().unwrap();
-        srv.shutdown();
+        srv.shutdown(&s.client);
         match srv.ensure_running(&s.client) {
             Ok(()) => {
                 drop(srv);

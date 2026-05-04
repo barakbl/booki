@@ -1,5 +1,6 @@
 use crate::api::Client;
 use anyhow::{anyhow, Context, Result};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -36,29 +37,82 @@ impl ServerProc {
 
         let booki = self.booki_executable()?;
         log::info!("spawning {} web", booki.display());
-        let child = Command::new(&booki)
+        // Capture stdout/stderr instead of /dev/null'ing them — silent
+        // failures (port-already-bound, missing fastapi, …) were
+        // impossible to diagnose otherwise. Each line gets re-logged
+        // through env_logger so it shows up alongside the manager's own
+        // log, prefixed so it's clear what's what.
+        let mut child = Command::new(&booki)
             .arg("web")
             .current_dir(&self.root)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .stdin(Stdio::null())
             .spawn()
             .with_context(|| format!("spawn {}", booki.display()))?;
+        if let Some(out) = child.stdout.take() {
+            std::thread::Builder::new().name("booki-stdout".into()).spawn(move || {
+                for line in BufReader::new(out).lines().map_while(Result::ok) {
+                    log::info!("[booki] {}", line);
+                }
+            }).ok();
+        }
+        if let Some(err) = child.stderr.take() {
+            std::thread::Builder::new().name("booki-stderr".into()).spawn(move || {
+                for line in BufReader::new(err).lines().map_while(Result::ok) {
+                    log::warn!("[booki] {}", line);
+                }
+            }).ok();
+        }
         self.child = Some(child);
+
+        // Give the child a moment to crash if it's going to (port collision
+        // is the obvious one). Detect early-exit and surface a clear error
+        // instead of waiting the full 10s.
+        std::thread::sleep(Duration::from_millis(500));
+        if let Some(c) = self.child.as_mut() {
+            if let Ok(Some(status)) = c.try_wait() {
+                self.child = None;
+                return Err(anyhow!("booki web exited immediately (status: {})", status));
+            }
+        }
 
         // Wait up to ~10s for /api/health to come up.
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             if client.health() { return Ok(()); }
+            // Bail early if the child already died.
+            if let Some(c) = self.child.as_mut() {
+                if let Ok(Some(status)) = c.try_wait() {
+                    self.child = None;
+                    return Err(anyhow!("booki web exited (status: {})", status));
+                }
+            }
             std::thread::sleep(Duration::from_millis(250));
         }
         Err(anyhow!("server did not become healthy in time"))
     }
 
-    pub fn shutdown(&mut self) {
+    /// Stop the running server — works for *both* our child and an
+    /// adopted server (one started outside the manager). Tries the
+    /// HTTP shutdown endpoint first; falls back to SIGKILL on the
+    /// child if we still have one.
+    pub fn shutdown(&mut self, client: &Client) {
+        // Best-effort HTTP shutdown — picks up adopted servers too.
+        if client.health() {
+            if let Err(e) = client.shutdown() {
+                log::debug!("api shutdown returned: {}", e);
+            }
+            // Wait briefly for the listener to release the port.
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                if !client.health() { break; }
+                std::thread::sleep(Duration::from_millis(150));
+            }
+        }
+        // Hard-kill our own child if it's still around (covers the case
+        // where the API endpoint is broken or a hung worker survived).
         if let Some(mut c) = self.child.take() {
-            // Give it a chance to exit cleanly. On Unix this is SIGKILL via
-            // std::process::Child::kill — uvicorn will tear down on receipt.
             let _ = c.kill();
             let _ = c.wait();
         }
@@ -76,7 +130,13 @@ impl ServerProc {
 
 impl Drop for ServerProc {
     fn drop(&mut self) {
-        self.shutdown();
+        // Manager process is exiting; we don't have the Client reference
+        // here so just SIGKILL our child (if any). Adopted servers stay
+        // running, which is the correct behavior — we didn't start them.
+        if let Some(mut c) = self.child.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
     }
 }
 

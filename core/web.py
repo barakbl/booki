@@ -394,6 +394,27 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
     def health():
         return {"ok": True, "count": len(svc._index), "bookmarks_dir": str(svc.dir)}
 
+    @app.post("/api/shutdown")
+    def shutdown():
+        """Trigger a clean uvicorn shutdown.
+
+        Used by the Rust booki-manager's tray menu (Web interface →
+        Stop / Restart) so the manager can stop *any* booki web server,
+        including ones it didn't spawn itself. The HTTP path is portable
+        (no PID hunting) and lets uvicorn drain in-flight requests
+        before exiting.
+
+        Implementation: send SIGTERM to our own process from a tiny
+        background thread. The current request returns first; uvicorn's
+        signal handler then runs the lifespan-shutdown sequence.
+        """
+        import os, signal, threading
+        threading.Thread(
+            target=lambda: (time.sleep(0.05), os.kill(os.getpid(), signal.SIGTERM)),
+            daemon=True,
+        ).start()
+        return {"ok": True, "message": "shutting down"}
+
     @app.get("/api/info")
     def info():
         """Static-ish runtime info (provider names, paths) for the Manage tab."""
