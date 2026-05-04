@@ -20,7 +20,7 @@ Booki pulls items from **pluggable sources** — Chrome / Safari / Firefox bookm
 
 - **🧬 Metadata enrichers** — per-URL classifiers promote items to richer kinds (`photo`, `video`, `channel`, `document`). Built-ins: GitHub, YouTube, photos, documents.
 
-- **🔎 Semantic search** — finds items by meaning, not keywords. Cross-language — English queries match Hebrew titles.
+- **🔎 Semantic search** — finds items by meaning, not keywords. Cross-language — English queries match Hebrew, Arabic, and other-language titles.
 
 - **🤖 LLM answers** — synthesizes an answer over the retrieved items.
 
