@@ -46,7 +46,7 @@ Booki pulls items from **pluggable sources** — Chrome / Safari / Firefox bookm
 
 - **🧩 Plugin tabs** — plugins ship `tab.js` + `tab.css` and add a top-level tab through a stable `window.booki` API.
 
-- **🚫 Proudly no-build** — plain `index.html` + one `app.js` + one `styles.css`. No bundler, no `node_modules`.
+- **🚫 #nobuild** — plain HTML, plain JavaScript, plain CSS. Ready to explore and hack — no bundler, no transpiler, no `node_modules`.
 
 - **🔒 Privacy-first** — defaults run fully locally with Ollama + local embeddings. Cloud LLMs are opt-in.
 
