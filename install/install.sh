@@ -33,7 +33,6 @@ XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
 XDG_BIN_HOME=${XDG_BIN_HOME:-$HOME/.local/bin}
 
 BOOKI_HOME=$XDG_DATA_HOME/booki
-CONFIG_DIR=$XDG_CONFIG_HOME/booki
 VENV=$BOOKI_HOME/.venv
 
 # ─── pretty output ──────────────────────────────────────────────────────────
@@ -71,7 +70,7 @@ case "$PY_VERSION" in
     *) die "python ≥ 3.10 required (found $PY_VERSION)" ;;
 esac
 
-mkdir -p "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_BIN_HOME" "$CONFIG_DIR"
+mkdir -p "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_BIN_HOME"
 
 # ─── clone or update ────────────────────────────────────────────────────────
 
@@ -102,20 +101,19 @@ fi
 ok "dependencies up to date"
 
 # ─── config ─────────────────────────────────────────────────────────────────
+#
+# The installer no longer drops a `config.toml` in place. `booki bootstrap`
+# is the supported way to author one — it asks about sources, embeddings,
+# LLM provider, and the menubar manager, and writes a config tailored to
+# the answers. The `config.toml.example` in the checkout stays as the
+# documented reference.
 
 say "Configuration"
-if [ ! -f "$CONFIG_DIR/config.toml" ]; then
-    cp "$BOOKI_HOME/config.toml.example" "$CONFIG_DIR/config.toml"
-    ok "wrote $CONFIG_DIR/config.toml from example"
+if [ -e "$BOOKI_HOME/config.toml" ]; then
+    ok "kept existing $BOOKI_HOME/config.toml"
 else
-    ok "kept existing $CONFIG_DIR/config.toml"
+    ok "no config written — run 'booki bootstrap' to generate one"
 fi
-
-# Symlink the install dir's expected config.toml at the XDG config so the
-# dispatcher's default path resolution finds it. Re-create the link every
-# run so the target stays correct after a moved $XDG_CONFIG_HOME.
-ln -sfn "$CONFIG_DIR/config.toml" "$BOOKI_HOME/config.toml"
-ok "linked $BOOKI_HOME/config.toml → $CONFIG_DIR/config.toml"
 
 # ─── wrapper ────────────────────────────────────────────────────────────────
 
@@ -263,7 +261,6 @@ ${BOLD}Booki installed.${NC}
 
   Code      : $BOOKI_HOME
   Venv      : $VENV
-  Config    : $CONFIG_DIR/config.toml
   Wrapper   : $WRAPPER
 EOF
 if [ -x "$MGR_WRAPPER" ]; then
@@ -273,14 +270,25 @@ EOF
 fi
 cat <<EOF
 
-Open a fresh shell (or 'source' your rc file) and try:
+Open a fresh shell (or 'source' your rc file) and run the wizard:
 
-  booki doctor          # check the install
+  ${BOLD}booki bootstrap${NC}     # interactive: sources, embeddings, LLM, manager
+
+Then the usual loop:
+
   booki sync            # pull from sources
   booki ingest          # build the vector index
   booki web             # browse in your browser
+  booki doctor          # check the install any time
 EOF
-if [ -x "$MGR_WRAPPER" ]; then
+if [ ! -x "$MGR_WRAPPER" ]; then
+cat <<EOF
+
+If you opt into the menubar manager during ${BOLD}booki bootstrap${NC}, build it
+with the cargo command the wizard prints at the end (requires Rust:
+https://rustup.rs/).
+EOF
+else
 cat <<EOF
   booki-manager         # menubar app: watches bookmarks + scheduled sync/ingest
 EOF

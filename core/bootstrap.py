@@ -671,11 +671,14 @@ def _print_next_steps(p: Prompter, ans: BootstrapAnswers) -> None:
               f"{s.dim(' to every booki command, or set BOOKI_CONFIG.')}")
 
     if ans.manager_setup:
+        booki_home = Path(ans.manager_booki_home).expanduser().resolve()
+        mgr_src = booki_home / "tools" / "booki-manager"
+        mgr_bin = mgr_src / "target" / "release" / "booki-manager"
         print()
         print(f"  {s.bold('Manager build')}")
-        print(f"     {s.cyan('→')} {s.bold('cd tools/booki-manager && cargo build --release')}")
-        print(f"        {s.dim('binary lands at target/release/booki-manager')}")
-        print(f"     {s.cyan('→')} {s.bold('./target/release/booki-manager')}")
+        print(f"     {s.cyan('→')} {s.bold(f'cd {mgr_src} && cargo build --release')}")
+        print(f"        {s.dim(f'binary lands at {mgr_bin}')}")
+        print(f"     {s.cyan('→')} {s.bold(str(mgr_bin))}")
         print(f"        {s.dim('then enable Launch at login from the tray menu for autostart')}")
 
 
