@@ -2981,11 +2981,86 @@ els.askInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); runAsk(); }
 });
 
+// Vector-search availability — driven by /api/info → vector_db.{enabled,installed}.
+// Vector search is opt-in twice: it must be enabled in config AND chromadb must
+// be installed. We gray out the Ask tab in either case so users don't get a 503
+// on first query, with a banner that names the specific reason.
+let _vectorDbAvailable = true;
+
+function _applyAskAvailability(vec) {
+  // vec: { available, enabled, installed } from /api/info, or `true` when
+  // we don't know yet (default to "available" so first paint isn't grayed).
+  const available = vec === true ? true : !!(vec && vec.available);
+  _vectorDbAvailable = available;
+
+  const reason =
+    available                  ? ""
+    : (vec && !vec.enabled)    ? "config"     // [vector_db] enabled = false
+    : (vec && !vec.installed)  ? "chromadb"   // pip dep missing
+                               : "unknown";
+  const shortMsg =
+    reason === "config"   ? "Ask is disabled in config — set [vector_db] enabled = true"
+    : reason === "chromadb" ? "Ask is disabled — install chromadb to enable vector search"
+    :                         "Ask is disabled";
+
+  const btn = document.querySelector('#tabBar .tab-btn[data-tab="ask"]');
+  if (btn) {
+    btn.classList.toggle("disabled", !available);
+    btn.title = available ? "Ask — semantic search + LLM" : shortMsg;
+  }
+  if (els.askInput) {
+    els.askInput.disabled = !available;
+    els.askInput.placeholder = available
+      ? "Ask a question about your bookmarks… (↵ to submit)"
+      : shortMsg;
+  }
+  if (els.useLlm) els.useLlm.disabled = !available;
+
+  const host = els.askResult;
+  if (host) {
+    let banner = host.querySelector(".ask-disabled-banner");
+    if (!available) {
+      const html =
+        reason === "config" ?
+          "Vector search is <strong>disabled in config.toml</strong>. " +
+          "Set <code>enabled = true</code> under <code>[vector_db]</code> and restart " +
+          "<code>booki web</code> to re-enable the Ask tab." :
+        reason === "chromadb" ?
+          "Vector search is disabled — <strong>ChromaDB is not installed</strong>. " +
+          "Install the optional dependency to enable Ask:<br>" +
+          "<code>pip install 'chromadb&gt;=0.5.0' 'sentence-transformers&gt;=2.2.0'</code>" +
+          "<br>Then run <code>booki ingest</code> to build the index." :
+          "Vector search is disabled.";
+      if (!banner) {
+        banner = document.createElement("div");
+        banner.className = "ask-disabled-banner";
+        host.prepend(banner);
+      }
+      banner.innerHTML = html;
+      host.classList.remove("hidden");
+    } else if (banner) {
+      banner.remove();
+    }
+  }
+}
+
+// Re-apply on tab-bar re-renders (Tabs.register triggers renderTabBar, which
+// wipes the bar's children — our .disabled class needs to be reapplied).
+let _vectorDbLastVec = null;
+const _tabBarObserver = new MutationObserver(() => {
+  if (!_vectorDbAvailable && _vectorDbLastVec) _applyAskAvailability(_vectorDbLastVec);
+});
+{
+  const _bar = document.getElementById("tabBar");
+  if (_bar) _tabBarObserver.observe(_bar, { childList: true });
+}
+
 // Cached results from the most recent /api/ask call so the view-mode
 // toggle can re-render without re-querying the LLM.
 let _askLastResults = [];
 
 async function runAsk() {
+  if (!_vectorDbAvailable) return;
   const q = els.askInput.value.trim();
   if (!q) return;
   els.askAnswer.textContent = "";
@@ -3257,6 +3332,19 @@ loadKinds();
 loadSchema().then(loadBookmarks).then(loadStats).catch(err => {
   els.count.textContent = `Error: ${err.message}`;
 });
+
+// Vector search is opt-in twice (config flag + chromadb installed). Gray the
+// Ask tab when either signal is off so users don't get a 503 on first query.
+fetch("/api/info")
+  .then(r => r.ok ? r.json() : null)
+  .then(info => {
+    const vec = info && info.vector_db;
+    if (vec && vec.available === false) {
+      _vectorDbLastVec = vec;
+      _applyAskAvailability(vec);
+    }
+  })
+  .catch(() => {});
 
 
 // ─── Export wizard ──────────────────────────────────────────────────

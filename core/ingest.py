@@ -32,8 +32,43 @@ except ImportError:
     except ImportError:
         sys.exit("Install tomli: pip install tomli  (or upgrade to Python 3.11+)")
 
-import chromadb
-from chromadb.utils import embedding_functions
+
+# chromadb is an *optional* dependency — only `booki ingest` and `booki chat`
+# (and the web "Ask" tab) need it. Importing it lazily keeps `booki sync`,
+# `booki doctor`, etc. usable on installs that skipped the vector-search deps.
+_VECTOR_DB_HINT = (
+    "ChromaDB is not installed — vector search is optional.\n"
+    "Install it to enable `booki ingest` and the Ask tab:\n"
+    "    pip install 'chromadb>=0.5.0' 'sentence-transformers>=2.2.0'"
+)
+
+_VECTOR_DB_DISABLED_HINT = (
+    "Vector search is disabled in config.toml ([vector_db] enabled = false).\n"
+    "Set `enabled = true` under [vector_db] to re-enable."
+)
+
+
+def vector_db_enabled(cfg: dict) -> bool:
+    """Read the optional `[vector_db].enabled` flag (default: true).
+
+    Lets users keep chromadb installed but switch the entire vector-search
+    pipeline off without touching code — useful when iterating on sync /
+    plugins without the embedding cost.
+    """
+    return bool((cfg.get("vector_db", {}) or {}).get("enabled", True))
+
+
+def chromadb_installed() -> bool:
+    try:
+        import chromadb  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def vector_db_available(cfg: dict) -> bool:
+    """True iff the user both opted in (config) AND has chromadb installed."""
+    return vector_db_enabled(cfg) and chromadb_installed()
 
 
 DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config.toml"
@@ -218,6 +253,11 @@ def load_all_bookmarks(bookmarks_dir: Path, min_importance: int) -> list[dict]:
 # ─── Embeddings ───────────────────────────────────────────────────────────────
 
 def get_embedding_fn(cfg: dict):
+    try:
+        from chromadb.utils import embedding_functions
+    except ImportError:
+        sys.exit(_VECTOR_DB_HINT)
+
     provider = cfg.get("provider", "local")
 
     if provider == "local":
@@ -240,6 +280,13 @@ def get_embedding_fn(cfg: dict):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def ingest(cfg: dict, reset: bool = False) -> None:
+    if not vector_db_enabled(cfg):
+        sys.exit(_VECTOR_DB_DISABLED_HINT)
+    try:
+        import chromadb
+    except ImportError:
+        sys.exit(_VECTOR_DB_HINT)
+
     bk_cfg = cfg["bookmarks"]
     db_cfg = cfg["vector_db"]
     em_cfg = cfg["embeddings"]

@@ -28,6 +28,10 @@ min_importance = 0
 # ─── Vector index ───────────────────────────────────────────────────────────
 
 [vector_db]
+# Set `enabled = false` to switch the entire vector-search pipeline off
+# without uninstalling chromadb — `booki ingest`, `booki chat`, and the
+# web Ask tab all read this flag. Default: true.
+# enabled   = true
 # Only "chromadb" is supported today.
 type        = "chromadb"
 persist_dir = "./db"

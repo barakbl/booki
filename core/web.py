@@ -423,6 +423,9 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         web_cfg = (cfg.get("web", {}) or {})
         vec = (cfg.get("vector_db", {}) or {})
         log_path = _resolved_log_path(cfg)
+        from .ingest import chromadb_installed, vector_db_enabled
+        vec_enabled = vector_db_enabled(cfg)
+        vec_installed = chromadb_installed()
         return {
             "bookmarks_dir": str(svc.dir),
             "vector_db": {
@@ -431,6 +434,9 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
                                    .resolve()) if not Path(vec.get("persist_dir", "./db")).is_absolute()
                                    else str(Path(vec.get("persist_dir", "./db")).resolve()),
                 "collection":  vec.get("collection", "bookmarks"),
+                "enabled":     vec_enabled,
+                "installed":   vec_installed,
+                "available":   vec_enabled and vec_installed,
             },
             "embeddings": {
                 "provider":     embed.get("provider", "local"),
@@ -800,6 +806,18 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
 
     @app.post("/api/ask", response_model=AskResult)
     def ask(q: AskQuery):
+        # Vector search is opt-in twice: by config flag AND by chromadb
+        # being installed. Surface 503 with a precise reason so the UI can
+        # render "disabled" rather than a 500 stack trace.
+        from .ingest import chromadb_installed, vector_db_enabled
+        if not vector_db_enabled(cfg):
+            raise HTTPException(503, "Vector search disabled in config.toml — "
+                                     "set [vector_db] enabled = true to re-enable.")
+        if not chromadb_installed():
+            raise HTTPException(503, "Vector search disabled — install chromadb "
+                                     "(pip install 'chromadb>=0.5.0' "
+                                     "'sentence-transformers>=2.2.0') and run "
+                                     "`booki ingest` to enable Ask.")
         # Imported lazily — sentence-transformers pulls in ~200MB of deps and
         # we don't want to block app startup for users who only use fuzzy search.
         try:

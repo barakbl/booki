@@ -75,7 +75,7 @@ PYTHON_PACKAGES: list[tuple] = [
      "Page-content extraction for `booki sync --enrich`", False,
      {"pip": "pip install 'trafilatura>=1.12.0'"}),
     ("py-chromadb", "chromadb", "chromadb", "chromadb",
-     "Local vector index for semantic search (booki ingest / Ask)", True,
+     "Local vector index for semantic search (booki ingest / Ask) — optional", False,
      {"pip": "pip install 'chromadb>=0.5.0'"}),
     ("py-sentence-transformers", "sentence-transformers",
      "sentence-transformers", "sentence_transformers",

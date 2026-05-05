@@ -159,7 +159,7 @@ Then, in a fresh shell, run the wizard to author your `config.toml`:
 booki bootstrap
 ```
 
-It walks you through bookmark sources, embeddings, LLM provider, and (optionally) the menubar manager. If you opt into the manager, the wizard prints the exact `cargo build --release` command to run afterwards — that step is optional and only needed if you want the tray app.
+It walks you through bookmark sources, embeddings, LLM provider, and (optionally) the menubar manager. The Rust tray app itself is built by the installer — near the end you're asked `Build the optional booki-manager menubar app now? [y/N]`. Answer `y` to compile it and drop a `booki-manager` wrapper alongside `booki` in `$XDG_BIN_HOME`; answer `n` (the default) and build it later with `cd tools/booki-manager && cargo build --release`.
 
 This installer is here for users who want to *try* Booki without thinking about Python venvs. Booki is a small, hackable, single-codebase tool — by philosophy you'll want the editable `git clone` flow above. Use the installer when you want a turnkey setup; use `git clone` when you want to live in the code.
 
@@ -170,7 +170,8 @@ The installer is **idempotent** (re-run any time to update) and **XDG-compliant*
 - Leaves `config.toml` to `booki bootstrap` (only `config.toml.example` ships in the checkout as the documented reference).
 - Drops a `booki` wrapper in `$XDG_BIN_HOME` (default `~/.local/bin`) that invokes the venv's python on the dispatcher script.
 - Detects your shell (fish / zsh / bash) and idempotently appends a PATH export *and* the matching `shells/booki.fish` / `shells/booki.zsh` source line — completion works without duplicate entries on re-runs.
-- Closes by suggesting `brew` / `apt` / `dnf` / `pacman` commands for the optional binaries Booki can use (`ffmpeg`, `fzf`, `ollama`).
+- Suggests `brew` / `apt` / `dnf` / `pacman` commands for the optional binaries Booki can use (`ffmpeg`, `fzf`, `ollama`).
+- Asks at the end whether to build the Rust `booki-manager` tray app — `y` runs `cargo build --release` and drops a `booki-manager` wrapper in `$XDG_BIN_HOME`; `n` (the default) keeps the ~350 MB cargo target cache off your disk until you opt in. The prompt reads `/dev/tty`, so it still works under `curl … | sh`; fully non-interactive runs (CI / cron) fall through to no. Re-running the installer asks again.
 
 Pin a branch or fork via env vars:
 

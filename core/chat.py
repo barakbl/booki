@@ -24,8 +24,11 @@ try:
 except ImportError:
     import tomli as tomllib  # type: ignore
 
-import chromadb
-from chromadb.utils import embedding_functions
+
+# chromadb is optional; only the search() path needs it. The module must stay
+# importable without it so callers (web.py's lazy ask handler, doctor, …) can
+# detect availability instead of crashing at import time.
+from .ingest import _VECTOR_DB_HINT, _VECTOR_DB_DISABLED_HINT, vector_db_enabled
 
 
 DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config.toml"
@@ -34,6 +37,11 @@ DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config.toml"
 # ─── Retrieval ────────────────────────────────────────────────────────────────
 
 def get_embedding_fn(em_cfg: dict):
+    try:
+        from chromadb.utils import embedding_functions
+    except ImportError:
+        sys.exit(_VECTOR_DB_HINT)
+
     provider = em_cfg.get("provider", "local")
     if provider == "local":
         return embedding_functions.SentenceTransformerEmbeddingFunction(
@@ -49,6 +57,13 @@ def get_embedding_fn(em_cfg: dict):
 
 
 def search(query: str, cfg: dict, n: int, min_importance: int) -> list[dict]:
+    if not vector_db_enabled(cfg):
+        sys.exit(_VECTOR_DB_DISABLED_HINT)
+    try:
+        import chromadb
+    except ImportError:
+        sys.exit(_VECTOR_DB_HINT)
+
     db_cfg = cfg["vector_db"]
     client = chromadb.PersistentClient(path=str(Path(db_cfg["persist_dir"])))
 

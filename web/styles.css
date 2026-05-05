@@ -127,6 +127,27 @@ a:hover { text-decoration: underline; }
   color: var(--text);
   border-color: var(--accent);
 }
+.tab-btn.disabled {
+  color: var(--text-faint);
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.tab-btn.disabled:hover { color: var(--text-faint); }
+
+.ask-disabled-banner {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.ask-disabled-banner code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
 
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }

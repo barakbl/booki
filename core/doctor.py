@@ -35,7 +35,11 @@ except ImportError:
     import tomli as tomllib  # type: ignore
 
 import plugins
-from .ingest import parse_bookmark_file
+from .ingest import (
+    chromadb_installed,
+    parse_bookmark_file,
+    vector_db_enabled,
+)
 from .sync import _is_disabled
 
 log = logging.getLogger("booki.doctor")
@@ -90,20 +94,25 @@ def _load_config(path: Path) -> dict:
         return tomllib.load(f)
 
 
-def _bookmarks_dir(cfg: dict, config_path: Path) -> Path:
-    raw = (cfg.get("bookmarks", {}) or {}).get("dir", "./bookmarks")
+def _resolve_path(raw: str, config_path: Path) -> Path:
     p = Path(raw).expanduser()
     if not p.is_absolute():
         p = (config_path.parent / p).resolve()
     return p
+
+
+def _bookmarks_dir(cfg: dict, config_path: Path) -> Path:
+    return _resolve_path(
+        (cfg.get("bookmarks", {}) or {}).get("dir", "./bookmarks"),
+        config_path,
+    )
 
 
 def _vector_db_dir(cfg: dict, config_path: Path) -> Path:
-    raw = (cfg.get("vector_db", {}) or {}).get("persist_dir", "./db")
-    p = Path(raw).expanduser()
-    if not p.is_absolute():
-        p = (config_path.parent / p).resolve()
-    return p
+    return _resolve_path(
+        (cfg.get("vector_db", {}) or {}).get("persist_dir", "./db"),
+        config_path,
+    )
 
 
 def _scan_library(bookmarks_dir: Path) -> dict:
@@ -170,6 +179,8 @@ def _scan_library(bookmarks_dir: Path) -> dict:
 def _vector_db_count(persist_dir: Path, collection_name: str) -> Optional[int]:
     """Return doc count, or None if the DB / collection isn't there yet."""
     if not persist_dir.exists():
+        return None
+    if not chromadb_installed():
         return None
     try:
         import chromadb
@@ -301,8 +312,31 @@ def _print_sources(s: Style, cfg: dict, lib: dict) -> None:
 
 # ─── Library section ──────────────────────────────────────────────────────────
 
-def _print_library(s: Style, cfg: dict, lib: dict, db_count: Optional[int],
-                   bookmarks_dir: Path, db_dir: Path) -> None:
+def _print_paths(s: Style, cfg: dict, config_path: Path,
+                 bookmarks_dir: Path, db_dir: Path) -> None:
+    _section(s, "Paths", "📁")
+
+    rows: list[tuple[str, str]] = [
+        ("Booki",     str(_PROJECT_ROOT)),
+        ("Config",    str(config_path) + ("" if config_path.exists() else "  (missing)")),
+        ("Bookmarks", str(bookmarks_dir)),
+        ("Vector DB", str(db_dir)),
+    ]
+
+    log_file = str((cfg.get("logs", {}) or {}).get("file") or "").strip()
+    if log_file:
+        rows.append(("Logs", str(_resolve_path(log_file, config_path))))
+
+    dl_dir = str((cfg.get("downloads", {}) or {}).get("dir") or "").strip()
+    if dl_dir:
+        rows.append(("Downloads", str(_resolve_path(dl_dir, config_path))))
+
+    width = max(len(label) for label, _ in rows)
+    for label, value in rows:
+        print(f"     {s.dim(label.ljust(width))}  {value}")
+
+
+def _print_library(s: Style, cfg: dict, lib: dict, db_count: Optional[int]) -> None:
     _section(s, "Library", "📚")
 
     total = lib["total"]
@@ -310,9 +344,6 @@ def _print_library(s: Style, cfg: dict, lib: dict, db_count: Optional[int],
     pct = int((enriched / total) * 100) if total else 0
     dead = lib["dead"]
     removed = lib["removed"]
-
-    print(f"     {s.dim('Bookmarks dir')}  {bookmarks_dir}")
-    print(f"     {s.dim('Vector DB    ')}  {db_dir}")
 
     if total == 0:
         _row(s, GWARN, "yellow", "library is empty", "run `booki sync` to populate")
@@ -339,9 +370,15 @@ def _print_library(s: Style, cfg: dict, lib: dict, db_count: Optional[int],
              f"{bar} · {_human_count(unenriched)} unenriched")
 
     # Vector DB
-    if db_count is None:
-        _row(s, GBAD, "red", "vector DB not built",
-             "run `booki ingest` to build the search index")
+    if not vector_db_enabled(cfg):
+        _row(s, GINFO, "dim", "vector DB disabled in config",
+             "[vector_db] enabled = false — Ask tab + `booki ingest` are off")
+    elif not chromadb_installed():
+        _row(s, GINFO, "dim", "vector DB skipped",
+             "ChromaDB not installed (optional) — Ask tab + `booki ingest` are disabled")
+    elif db_count is None:
+        _row(s, GINFO, "dim", "vector DB not built",
+             "run `booki ingest` to build the search index (optional)")
     elif db_count < total:
         _row(s, GWARN, "yellow",
              f"vector DB has {_human_count(db_count)} docs",
@@ -416,13 +453,15 @@ def _print_suggestions(s: Style, cfg: dict, lib: dict, db_count: Optional[int],
                 f"run `booki sync --no-sync --enrich` — {_human_count(unenriched)} item(s) "
                 f"unenriched ({pct}% enriched)"))
 
-        # 4. Vector DB out of sync
-        if db_count is None:
-            tips.append(("cyan", "run `booki ingest` — vector index not built yet"))
-        elif db_count < lib["total"]:
-            tips.append(("yellow",
-                f"run `booki ingest` — index has {_human_count(db_count)} docs, "
-                f"library has {_human_count(lib['total'])}"))
+        # 4. Vector DB out of sync — only nudge when the user actually opted
+        # into vector search (chromadb installed AND not disabled in config).
+        if vector_db_enabled(cfg) and chromadb_installed():
+            if db_count is None:
+                tips.append(("cyan", "run `booki ingest` — vector index not built yet"))
+            elif db_count < lib["total"]:
+                tips.append(("yellow",
+                    f"run `booki ingest` — index has {_human_count(db_count)} docs, "
+                    f"library has {_human_count(lib['total'])}"))
 
         # 5. Dead-link sweep (only when the user has links)
         if lib["dead"] == 0 and any(k == "bookmark" for k in lib["by_kind"]):
@@ -504,8 +543,9 @@ def run(cfg: dict, config_path: Path, *, color: bool) -> int:
 
     db_count = _vector_db_count(db_dir, db_collection)
 
+    _print_paths(s, cfg, config_path, bookmarks_dir, db_dir)
     _print_sources(s, cfg, lib)
-    _print_library(s, cfg, lib, db_count, bookmarks_dir, db_dir)
+    _print_library(s, cfg, lib, db_count)
     _print_suggestions(s, cfg, lib, db_count, sys_payload)
     _footer(s, width)
     return 0

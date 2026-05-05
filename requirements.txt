@@ -9,9 +9,11 @@ trafilatura>=1.12.0            # page content extraction for --enrich
 # plugins/rss — install only if you use [sources.rss]
 # feedparser>=6.0.0
 
-# ingest.py
-chromadb>=0.5.0
-sentence-transformers>=2.2.0   # local embeddings (embeddings.provider = "local")
+# ingest.py — optional. Vector search powers `booki ingest`, `booki chat`,
+# and the Ask tab. Without it, sync / web / browse / doctor all still work;
+# the Ask tab just renders grayed-out.
+# chromadb>=0.5.0
+# sentence-transformers>=2.2.0   # local embeddings (embeddings.provider = "local")
 
 # chat.py — install only what you need based on llm.provider in config.toml
 anthropic>=0.30.0              # llm.provider = "claude"
