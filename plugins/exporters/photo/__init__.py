@@ -16,34 +16,17 @@ import base64
 import mimetypes
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import unquote
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from core.exporter import Exporter, register_exporter
+from core.local_files import safe_local_path
 
 MAX_EMBED_BYTES = 25 * 1024 * 1024
 
 
-def _local_path_from_url(url: str) -> Path | None:
-    if not url:
-        return None
-    if url.startswith("file://"):
-        rest = url[len("file://"):]
-        # file:///abs/path or file://localhost/abs/path
-        if rest.startswith("/"):
-            return Path(unquote(rest))
-        if rest.startswith("localhost/"):
-            return Path(unquote(rest[len("localhost"):]))
-    if url.startswith("/"):
-        return Path(url)
-    return None
-
-
 def _to_data_uri(p: Path) -> str | None:
     try:
-        if not p.is_file():
-            return None
         if p.stat().st_size > MAX_EMBED_BYTES:
             return None
         mime, _ = mimetypes.guess_type(str(p))
@@ -55,18 +38,24 @@ def _to_data_uri(p: Path) -> str | None:
         return None
 
 
-def _resolve_image(item: dict) -> tuple[str | None, str | None]:
+def _resolve_image(item: dict, local_roots: list[Path]) -> tuple[str | None, str | None]:
     """Return (src, error). `src` is a string suitable for an <img src>
     attribute in the exported HTML. `error` is set when no src could be
-    produced (used to render a placeholder tile)."""
+    produced (used to render a placeholder tile).
+
+    Local references (`file://`, absolute paths) are only embedded when
+    their resolved real path lives under one of `local_roots`. Anything
+    else returns `(None, "outside configured directories")` and renders
+    as a placeholder — never silently reads `/root/foo.jpg`.
+    """
     url = str(item.get("url") or "").strip()
     if not url:
         return None, "no url"
     if url.startswith(("http://", "https://")):
         return url, None
-    p = _local_path_from_url(url)
+    p = safe_local_path(url, local_roots)
     if p is None:
-        return None, "unsupported scheme"
+        return None, "outside configured directories"
     src = _to_data_uri(p)
     if src is None:
         return None, "missing or too large"
@@ -104,8 +93,12 @@ class PhotoGalleryExporter(Exporter):
         rtl = bool(options.get("rtl", False))
 
         photos = []
+        local_roots = list(self.local_roots)
+        skipped_local = 0
         for it in items:
-            src, err = _resolve_image(it)
+            src, err = _resolve_image(it, local_roots)
+            if err == "outside configured directories":
+                skipped_local += 1
             photos.append({
                 "title": it.get("title") or "",
                 "url": it.get("url") or "",
@@ -115,6 +108,11 @@ class PhotoGalleryExporter(Exporter):
                 "summary": it.get("summary") or "",
                 "importance": int(it.get("importance") or 0),
             })
+
+        if skipped_local:
+            note = (f"{skipped_local} image{'s' if skipped_local != 1 else ''}"
+                    " skipped — outside configured [[sources.directory.dirs]]")
+            footer_text = (footer_text + " · " + note) if footer_text else note
 
         env = Environment(
             loader=FileSystemLoader(str(theme.path)),

@@ -371,14 +371,8 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
     # Allow-list of roots from the directory source plugin. Used by the local
     # image proxy below — file:// images can't be loaded directly into an HTTP
     # page, but we can stream them back through this allow-listed endpoint.
-    _local_roots: list[Path] = []
-    for _d in ((cfg.get("sources", {}) or {}).get("directory", {}) or {}).get("dirs", []) or []:
-        _p = (_d or {}).get("path", "")
-        if _p:
-            try:
-                _local_roots.append(Path(_p).expanduser().resolve())
-            except (OSError, RuntimeError):
-                continue
+    from .local_files import directory_roots, safe_local_path
+    _local_roots = directory_roots(cfg)
 
     _IMG_EXT = {
         ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".avif",
@@ -399,18 +393,11 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         """
         if not _local_roots:
             raise HTTPException(404)
-        try:
-            target = Path(path).expanduser().resolve(strict=True)
-        except (OSError, RuntimeError, ValueError):
-            raise HTTPException(404)
-        if not target.is_file():
+        target = safe_local_path(path, _local_roots)
+        if target is None:
             raise HTTPException(404)
         if target.suffix.lower() not in _IMG_EXT:
             raise HTTPException(415, "unsupported file type")
-        # Containment check: target must live under one of the allow-listed
-        # roots (after symlink resolution).
-        if not any(_is_within(target, r) for r in _local_roots):
-            raise HTTPException(403, "outside allowed roots")
         import mimetypes
         mime, _ = mimetypes.guess_type(str(target))
         return FileResponse(target, media_type=mime or "application/octet-stream")

@@ -42,8 +42,21 @@ from urllib.parse import urljoin, urlparse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from core.exporter import Exporter, TaskHandle, register_exporter
+from core.local_files import safe_local_path
 
 log = logging.getLogger("booki.exporter.archive")
+
+
+# Raised when a per-item plan touches a local file outside the configured
+# `[[sources.directory.dirs]]` roots. Caught by the per-item retry loop in
+# run_background, which appends the message to `skipped` so the user sees
+# the reason both in the live task log and the rendered index.html.
+class _LocalFileSkipped(Exception):
+    pass
+
+
+def _is_file_url(url: str) -> bool:
+    return bool(url) and url.lower().startswith("file://")
 
 # ─── classification ─────────────────────────────────────────────────────────
 
@@ -87,16 +100,33 @@ def _ext_from_url(url: str) -> str:
     return Path(path).suffix.lower()
 
 
-def _classify(item: dict) -> tuple[str, str]:
+def _classify(item: dict, local_roots: list[Path]) -> tuple[str, str]:
     """
     URL-only classification (no network). Returns (plan, note).
     Truth at run-time may differ when the server's Content-Type contradicts
     the URL — the runner re-checks with HEAD where it matters.
+
+    Local files (`file://` URLs or `image_path` from frontmatter) are only
+    accepted when their resolved real path lives under one of `local_roots`
+    (the configured `[[sources.directory.dirs]]`). Anything else returns
+    a `("skip", reason)` so the runner records it without ever opening
+    the file.
     """
     url = (item.get("url") or "").strip()
     kind = (item.get("kind") or "").lower()
     if not url:
         return ("skip", "no URL")
+
+    # file:// URLs as the item's primary URL: only honored if inside roots.
+    if _is_file_url(url):
+        if safe_local_path(url, local_roots) is None:
+            return ("skip", f"file:// URL outside configured directories: {url}")
+        # Treat as a local image when the extension or kind says so;
+        # otherwise it's a local file we can't meaningfully bundle.
+        ext = _ext_from_url(url)
+        if kind == "photo" or ext in IMAGE_EXTS:
+            return (PLAN_LOCAL_PHOTO, "local file:// from frontmatter")
+        return ("skip", f"unsupported local file type: {url}")
 
     ext = _ext_from_url(url)
     if ext == ".pdf":
@@ -104,8 +134,12 @@ def _classify(item: dict) -> tuple[str, str]:
     if ext in IMAGE_EXTS:
         return (PLAN_IMAGE, f"URL ends in {ext}")
     if kind == "photo":
-        if item.get("image_path") and Path(str(item["image_path"])).is_file():
-            return (PLAN_LOCAL_PHOTO, "local file from frontmatter")
+        raw_ip = item.get("image_path")
+        if raw_ip:
+            if safe_local_path(str(raw_ip), local_roots) is not None:
+                return (PLAN_LOCAL_PHOTO, "local file from frontmatter")
+            return ("skip",
+                    f"image_path outside configured directories: {raw_ip}")
         return (PLAN_IMAGE, "kind=photo")
     host = (urlparse(url).hostname or "").lower()
     if kind == "video" or host in KNOWN_VIDEO_DOMAINS:
@@ -192,8 +226,9 @@ class OfflineArchiveExporter(Exporter):
         shown = items[:cap]
         used: set[str] = set()
         rendered: list[dict] = []
+        local_roots = list(self.local_roots)
         for it in shown:
-            plan, _ = _classify(it)
+            plan, _ = _classify(it, local_roots)
             if plan == "skip":
                 continue
             slug = _unique_slug(it.get("title") or "", used)
@@ -287,6 +322,7 @@ class OfflineArchiveExporter(Exporter):
         skipped: list[dict] = []
         used: set[str] = set()
         total = len(items)
+        local_roots = list(self.local_roots)
 
         try:
             for i, it in enumerate(items, start=1):
@@ -295,10 +331,10 @@ class OfflineArchiveExporter(Exporter):
                 task.progress(i - 1, total)
                 task.log(f"[{i}/{total}] {title}")
 
-                plan, _ = _classify(it)
+                plan, reason = _classify(it, local_roots)
                 if plan == "skip":
-                    task.log("  skipped: no URL")
-                    skipped.append({"title": title, "reason": "no URL"})
+                    task.log(f"  skipped: {reason}")
+                    skipped.append({"title": title, "reason": reason})
                     continue
 
                 slug = _unique_slug(title, used)
@@ -315,8 +351,16 @@ class OfflineArchiveExporter(Exporter):
                             include_subs=include_subs,
                             sub_lang=sub_lang,
                             task=task,
+                            local_roots=local_roots,
                         )
                         err = ""
+                        break
+                    except _LocalFileSkipped as e:
+                        # Containment failure — no point retrying. Skip
+                        # cleanly with the reason so the user sees it
+                        # both in the live log and the rendered index.
+                        err = str(e)
+                        task.log(f"  skipped: {err}")
                         break
                     except Exception as e:
                         err = f"{type(e).__name__}: {e}"
@@ -398,21 +442,31 @@ def _planned_filename(plan: str, slug: str, item: dict) -> str:
 
 def _archive_one(item: dict, plan: str, slug: str, out_dir: Path, *,
                  pw_ctx, video_quality: str, include_subs: bool, sub_lang: str,
-                 task: TaskHandle) -> dict:
+                 task: TaskHandle, local_roots: list[Path]) -> dict:
     url = (item.get("url") or "").strip()
+    # Belt-and-suspenders: _classify already rejects file:// URLs that
+    # aren't in roots, but if a plan ever points at one and it slipped
+    # through (e.g. PDF/IMAGE plans that read by URL extension), refuse
+    # before handing it to `requests`, which would raise a noisy
+    # InvalidSchema. Keep the skip reason crisp.
+    if _is_file_url(url) and plan in (PLAN_PDF, PLAN_IMAGE, PLAN_VIDEO, PLAN_HTML):
+        if safe_local_path(url, local_roots) is None:
+            raise _LocalFileSkipped(
+                f"file:// URL outside configured directories: {url}")
     if plan == PLAN_PDF:
         return _archive_pdf(url, slug, out_dir)
     if plan == PLAN_IMAGE:
         return _archive_image(url, slug, out_dir)
     if plan == PLAN_LOCAL_PHOTO:
-        return _archive_local_photo(item, slug, out_dir)
+        return _archive_local_photo(item, slug, out_dir, local_roots=local_roots)
     if plan == PLAN_VIDEO:
         return _archive_video(url, slug, out_dir,
                               quality=video_quality,
                               include_subs=include_subs,
                               sub_lang=sub_lang)
     # default: HTML
-    return _archive_html(url, slug, out_dir, pw_ctx=pw_ctx, task=task)
+    return _archive_html(url, slug, out_dir, pw_ctx=pw_ctx, task=task,
+                         local_roots=local_roots)
 
 
 def _archive_pdf(url: str, slug: str, out_dir: Path) -> dict:
@@ -445,10 +499,13 @@ def _archive_image(url: str, slug: str, out_dir: Path) -> dict:
     return {"filename": dest.name}
 
 
-def _archive_local_photo(item: dict, slug: str, out_dir: Path) -> dict:
-    src = Path(str(item.get("image_path") or ""))
-    if not src.is_file():
-        raise FileNotFoundError(f"local image not found: {src}")
+def _archive_local_photo(item: dict, slug: str, out_dir: Path, *,
+                         local_roots: list[Path]) -> dict:
+    raw = str(item.get("image_path") or item.get("url") or "")
+    src = safe_local_path(raw, local_roots)
+    if src is None:
+        raise _LocalFileSkipped(
+            f"image_path outside configured directories: {raw}")
     ext = src.suffix.lower() or ".jpg"
     dest = out_dir / f"{slug}{ext}"
     shutil.copy2(src, dest)
@@ -523,11 +580,15 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) "
        "Chrome/126.0.0.0 Safari/537.36")
 
 
-def _archive_html(url: str, slug: str, out_dir: Path, *, pw_ctx, task: TaskHandle) -> dict:
+def _archive_html(url: str, slug: str, out_dir: Path, *, pw_ctx,
+                  task: TaskHandle, local_roots: list[Path]) -> dict:
     """
     Save a single-file HTML snapshot of `url`. With Playwright: navigates,
     waits for networkidle, returns rendered HTML. Without: plain GET.
     Either way: subresources are inlined and embedded PDFs are extracted.
+
+    `local_roots` gates any `file://` subresource the page references —
+    only paths inside those roots get inlined, the rest are dropped.
     """
     if pw_ctx is not None:
         html, final_url, fetcher = pw_ctx.fetch(url)
@@ -538,6 +599,7 @@ def _archive_html(url: str, slug: str, out_dir: Path, *, pw_ctx, task: TaskHandl
         html = r.text
         final_url = r.url
         fetcher = _RequestsFetcher()
+    fetcher = _LocalAwareFetcher(fetcher, local_roots, task)
 
     # Extract embedded PDFs *before* rewriting subresources so we can rewrite
     # the iframe src to a local sibling file.
@@ -705,6 +767,46 @@ def _guess_ct(url: str) -> str:
 
 
 # ─── fetchers ───────────────────────────────────────────────────────────────
+
+class _LocalAwareFetcher:
+    """
+    Decorator around the real fetcher (Playwright or requests) that
+    intercepts `file://` subresource URLs. Local files are only read when
+    inside the allow-listed roots; otherwise the fetch raises so
+    `_inline_subresources` falls into its silent-failure branch and the
+    tag keeps its original href (rendered as a broken link in the saved
+    page rather than a leaked filesystem read).
+
+    Non-`file://` URLs are forwarded unchanged.
+    """
+    def __init__(self, inner, local_roots: list[Path], task: TaskHandle):
+        self._inner = inner
+        self._roots = local_roots
+        self._task = task
+        self.last_content_type = ""
+
+    def _local_bytes(self, url: str) -> bytes:
+        p = safe_local_path(url, self._roots)
+        if p is None:
+            self._task.log(f"  inline skipped (outside configured directories): {url}")
+            raise RuntimeError(f"local file outside configured directories: {url}")
+        self.last_content_type = _guess_ct(url)
+        return p.read_bytes()
+
+    def fetch(self, url: str) -> bytes:
+        if _is_file_url(url):
+            return self._local_bytes(url)
+        data = self._inner.fetch(url)
+        self.last_content_type = self._inner.last_content_type
+        return data
+
+    def fetch_text(self, url: str) -> str:
+        if _is_file_url(url):
+            return self._local_bytes(url).decode("utf-8", errors="replace")
+        text = self._inner.fetch_text(url)
+        self.last_content_type = self._inner.last_content_type
+        return text
+
 
 class _RequestsFetcher:
     """Plain HTTP fetcher used when Playwright isn't available."""

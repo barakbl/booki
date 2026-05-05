@@ -30,6 +30,11 @@ import threading
 import time
 import uuid
 import zipfile
+
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib  # type: ignore
 from abc import ABC
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -215,6 +220,14 @@ class Exporter(ABC):
     execution_mode: str = "immediate"     # "immediate" | "background"
     uses_themes: bool = False
     options_schema: list[dict] = []        # each item = {name, type, label, default, options?, help?}
+
+    # Resolved `[[sources.directory.dirs]]` paths. The runner injects this
+    # on the instance before run_*/preview. Exporters that touch local
+    # files (copy, base64-embed) MUST gate that on
+    # `core.local_files.safe_local_path(raw, self.local_roots)` and skip
+    # anything that returns None — the empty-list default means "no local
+    # files allowed at all", which is the correct fail-safe.
+    local_roots: list[Path] = []
 
     # When True the exporter can render nested folders (the wizard's Refine
     # step will tell the user "this exporter supports hierarchy"). Even when
@@ -618,11 +631,13 @@ class BackgroundRunner:
     """
 
     def __init__(self, store: TaskStore, item_resolver: Callable[[list[str]], list[dict]],
-                 artifacts_dir: Path, themes_root: Path):
+                 artifacts_dir: Path, themes_root: Path,
+                 local_roots: Optional[list[Path]] = None):
         self.store = store
         self.item_resolver = item_resolver
         self.artifacts_dir = artifacts_dir
         self.themes_root = themes_root
+        self.local_roots = list(local_roots or [])
         self._q: "queue.Queue[str]" = queue.Queue()
         self._worker: Optional[threading.Thread] = None
         self._running = False
@@ -672,6 +687,7 @@ class BackgroundRunner:
 
         try:
             inst = cls()
+            inst.local_roots = list(self.local_roots)
             theme = None
             if inst.uses_themes and t.theme:
                 theme_kind = inst.applicable_kinds[0] if inst.applicable_kinds else "any"
@@ -830,11 +846,25 @@ def attach_routes(app: FastAPI, cfg: dict, config_path: Path, svc) -> None:
 
     store = TaskStore(tasks_dir)
 
+    # Allow-listed roots for any local-file read an exporter might do.
+    # Re-read on every immediate/preview call so config edits take effect
+    # without restarting the server (the background runner only reads
+    # them at startup, which matches how it picks up other settings).
+    from .local_files import directory_roots
+
     def _resolve(item_ids: list[str]) -> list[dict]:
         svc.refresh()
         return items_from_ids(svc, item_ids)
 
-    runner = BackgroundRunner(store, _resolve, artifacts_dir, themes_root)
+    def _live_local_roots() -> list[Path]:
+        try:
+            live_cfg = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            live_cfg = cfg
+        return directory_roots(live_cfg)
+
+    runner = BackgroundRunner(store, _resolve, artifacts_dir, themes_root,
+                              local_roots=directory_roots(cfg))
     runner.start()
 
     # ── Discovery ───────────────────────────────────────────────────────
@@ -907,6 +937,7 @@ def attach_routes(app: FastAPI, cfg: dict, config_path: Path, svc) -> None:
         if not req.item_ids:
             raise HTTPException(400, "item_ids is empty")
         inst = cls()
+        inst.local_roots = _live_local_roots()
         theme = None
         if inst.uses_themes and req.theme:
             theme_kind = inst.applicable_kinds[0] if inst.applicable_kinds else "any"
@@ -935,6 +966,7 @@ def attach_routes(app: FastAPI, cfg: dict, config_path: Path, svc) -> None:
             raise HTTPException(400, "item_ids is empty")
 
         inst = cls()
+        inst.local_roots = _live_local_roots()
         theme = None
         if inst.uses_themes and req.theme:
             theme_kind = inst.applicable_kinds[0] if inst.applicable_kinds else "any"
