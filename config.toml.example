@@ -72,6 +72,10 @@ n_results = 5                              # how many bookmarks to retrieve per 
 host   = "127.0.0.1"      # bind to 0.0.0.0 to expose on your LAN
 port   = 8765
 reload = false            # uvicorn auto-reload — dev only
+# Browsers may load the UI from these origins. Same-origin
+# (http://host:port + localhost loopbacks) is always allowed; list extras
+# below, or set ["*"] to disable origin checks entirely (not recommended).
+# cors_origins = ["http://my-other-host:8765"]
 
 
 # ─── Logging ────────────────────────────────────────────────────────────────

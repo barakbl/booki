@@ -333,9 +333,34 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
     dl_lock = threading.Lock()
 
     app = FastAPI(title="Booki", description="Bookmark explorer")
+
+    # CORS: default to same-origin only (the configured host/port plus the
+    # localhost loopback variants on that port). Users can extend or relax
+    # this via `[web].cors_origins` — set to ["*"] to disable origin checks.
+    web_cfg = cfg.get("web", {}) or {}
+    web_host = str(web_cfg.get("host", "127.0.0.1"))
+    web_port = int(web_cfg.get("port", 1000))
+    configured = [str(o).strip().rstrip("/")
+                  for o in (web_cfg.get("cors_origins") or [])
+                  if str(o).strip()]
+    if "*" in configured:
+        cors_kwargs: dict[str, Any] = {"allow_origins": ["*"]}
+    else:
+        default_origins = {
+            f"http://localhost:{web_port}",
+            f"http://127.0.0.1:{web_port}",
+        }
+        if web_host not in ("0.0.0.0", "127.0.0.1", "localhost", "::", ""):
+            default_origins.add(f"http://{web_host}:{web_port}")
+        cors_kwargs = {
+            "allow_origins": sorted(default_origins | set(configured)),
+            "allow_credentials": True,
+        }
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+        **cors_kwargs,
     )
     app.state.config_path = config_path
     app.state.cfg = cfg
