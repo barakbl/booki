@@ -394,7 +394,15 @@ function openUrlInNewTab(url) {
     showToast("Local file — open from your file manager");
     return;
   }
-  window.open(url, "_blank", "noopener");
+  // Refuse non-http(s)/file schemes so a frontmatter-controlled URL can't
+  // become a click-to-XSS sink (javascript:/data:/vbscript:). Mirrors the
+  // SAFE_HREF_SCHEMES guard used everywhere we render <a href>.
+  const safe = safeHref(url);
+  if (!safe) {
+    showToast("Refusing to open unsafe URL scheme");
+    return;
+  }
+  window.open(safe, "_blank", "noopener");
 }
 
 // Shortcut targets — each results-bearing tab points at the bookmark
@@ -572,7 +580,7 @@ function renderItemsGrid(host, items, opts = {}) {
     tile.addEventListener("keydown", (e) => {
       if ((e.key === "Enter" || e.key === " ") && bm) {
         e.preventDefault();
-        if (bm.url && e.key === "Enter") window.open(bm.url, "_blank", "noopener");
+        if (bm.url && e.key === "Enter") openUrlInNewTab(bm.url);
         else onClick(bm);
       }
     });
@@ -1481,7 +1489,7 @@ window.addEventListener("keydown", (e) => {
     else if (e.key === "ArrowUp") { e.preventDefault(); moveSelection(-1); }
     else if (e.key === "Enter" && document.activeElement === els.findInput) {
       const row = state.filtered[state.selected];
-      if (row && row.bm.url) window.open(row.bm.url, "_blank", "noopener");
+      if (row && row.bm.url) openUrlInNewTab(row.bm.url);
     } else if (e.key === "e" && !inTyping) {
       const row = state.filtered[state.selected];
       if (row) openDetail(row.bm.id).then(openEdit);
@@ -2148,7 +2156,7 @@ Tabs.register({
         if (first) {
           const id = first.dataset.id;
           const bm = state.all.find(b => b.id === id);
-          if (bm?.url) window.open(bm.url, "_blank", "noopener");
+          if (bm?.url) openUrlInNewTab(bm.url);
         }
       } else if (e.key === "Escape") {
         if (input.value) { input.value = ""; renderPhotoGrid(); }
@@ -2361,7 +2369,7 @@ Tabs.register({
         if (first) {
           const id = first.dataset.id;
           const bm = state.all.find(b => b.id === id);
-          if (bm?.url) window.open(bm.url, "_blank", "noopener");
+          if (bm?.url) openUrlInNewTab(bm.url);
         }
       } else if (e.key === "Escape") {
         if (input.value) { input.value = ""; renderVideoGrid(); }
@@ -3143,11 +3151,16 @@ async function runAsk() {
       throw new Error(`${r.status}: ${text}`);
     }
     const data = await r.json();
+    // Disclose remote embedding — when embeddings.provider isn't "local",
+    // the query string left the machine before any LLM toggle was checked.
+    const emHint = (data.embeddings_provider && data.embeddings_provider !== "local")
+      ? ` · query embedded by ${data.embeddings_provider}`
+      : "";
     if (data.answer) {
       els.askAnswer.textContent = data.answer;
-      els.askStatus.textContent = `${data.bookmarks.length} results · ${data.provider}/${data.model}`;
+      els.askStatus.textContent = `${data.bookmarks.length} results · ${data.provider}/${data.model}${emHint}`;
     } else {
-      els.askStatus.textContent = `${data.bookmarks.length} results`;
+      els.askStatus.textContent = `${data.bookmarks.length} results${emHint}`;
     }
     _askLastResults = data.bookmarks.map((bm) => {
       // Resolve to the full bookmark so renderers have tags / kind / etc.

@@ -393,6 +393,41 @@ _CONTENT_BLOCK_EMPTY = (
 )
 
 
+def _sanitize_enrich_content(text: str) -> str:
+    """Neutralize prompt-injection vectors before substituting page text
+    into the triple-quoted content block of DEFAULT_ENRICH_PROMPT.
+
+    The enricher prompt delimits the page content with `\"\"\"…\"\"\"`. A page
+    that contains `\"\"\"` in its extracted text could close the fence and
+    inject new instructions into the enricher LLM, whose JSON output is
+    then trusted and stored in frontmatter (summary/keywords). Replace
+    runs of three-or-more `\"` with a non-fence Unicode equivalent, drop
+    control characters, and let the caller's max_content_chars cap apply.
+    """
+    text = re.sub(r'"{3,}', '”””', text)
+    text = "".join(c for c in text if c in ("\n", "\t") or ord(c) >= 0x20)
+    return text
+
+
+# Defensive caps applied to whatever JSON the enricher returns. The prompt
+# already asks for ONE sentence (~25 words) and 5–10 keywords; these caps
+# limit the blast radius of a poisoned page that talks the enricher into
+# emitting a much longer payload.
+_ENRICH_SUMMARY_MAX_CHARS = 280
+_ENRICH_KEYWORD_MAX_CHARS = 60
+_ENRICH_KEYWORD_MAX_COUNT = 20
+_ENRICH_TITLE_MAX_CHARS   = 200
+
+
+def _scrub_enrich_field(s: str, cap: int) -> str:
+    """Strip control chars and clamp length on enricher-returned strings."""
+    s = "".join(c for c in str(s) if c == " " or ord(c) >= 0x20)
+    s = s.strip()
+    if len(s) > cap:
+        s = s[:cap].rstrip() + "…"
+    return s
+
+
 IMAGE_EXTS = {
     "jpg", "jpeg", "png", "heic", "heif", "tif", "tiff", "gif", "webp",
     "bmp", "avif", "raw", "cr2", "cr3", "nef", "arw", "dng", "rw2", "orf",
@@ -695,7 +730,7 @@ class Enricher:
     def summarize(self, *, title: str, url: str, kind: str, tags: list,
                   notes: str, content: str) -> EnrichmentResult:
         content_block = (
-            _CONTENT_BLOCK_WITH.format(content=content)
+            _CONTENT_BLOCK_WITH.format(content=_sanitize_enrich_content(content))
             if content.strip()
             else _CONTENT_BLOCK_EMPTY
         )
@@ -735,13 +770,20 @@ class Enricher:
         if raw.startswith("```"):
             raw = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", raw).strip()
         data = json.loads(raw)
+        keywords_raw = data.get("keywords", [])
+        if not isinstance(keywords_raw, list):
+            keywords_raw = []
+        keywords = []
+        for k in keywords_raw[:_ENRICH_KEYWORD_MAX_COUNT]:
+            kw = _scrub_enrich_field(k, _ENRICH_KEYWORD_MAX_CHARS).lower()
+            if kw:
+                keywords.append(kw)
         return EnrichmentResult(
-            summary=str(data.get("summary", "")).strip(),
-            keywords=[
-                str(k).strip().lower() for k in data.get("keywords", [])
-                if str(k).strip()
-            ],
-            page_title=str(data.get("page_title", "")).strip(),
+            summary=_scrub_enrich_field(data.get("summary", ""),
+                                        _ENRICH_SUMMARY_MAX_CHARS),
+            keywords=keywords,
+            page_title=_scrub_enrich_field(data.get("page_title", ""),
+                                           _ENRICH_TITLE_MAX_CHARS),
         )
 
 

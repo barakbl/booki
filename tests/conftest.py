@@ -179,12 +179,14 @@ def empty_app(tmp_path: Path, empty_bookmarks_dir: Path):
 @pytest.fixture
 def client(app):
     from fastapi.testclient import TestClient
-    with TestClient(app) as c:
+    # Use a loopback Host header so the TrustedHostMiddleware allow-list
+    # accepts the request — the default `http://testserver` would 400.
+    with TestClient(app, base_url="http://127.0.0.1:8000") as c:
         yield c
 
 
 @pytest.fixture
 def empty_client(empty_app):
     from fastapi.testclient import TestClient
-    with TestClient(empty_app) as c:
+    with TestClient(empty_app, base_url="http://127.0.0.1:8000") as c:
         yield c

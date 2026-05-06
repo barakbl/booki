@@ -31,6 +31,7 @@ except ImportError:
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
@@ -116,9 +117,12 @@ class ListRename(BaseModel):
 
 
 class AskQuery(BaseModel):
-    query: str
-    n: int = 5
-    min_importance: int = 0
+    # Hard caps on the request shape so an attacker that reaches /api/ask
+    # (e.g. via a malicious page if the server is bound off-loopback) can't
+    # blow remote-LLM token budgets or DoS the chroma collection.
+    query: str = Field(min_length=1, max_length=2000)
+    n: int = Field(default=5, ge=1, le=50)
+    min_importance: int = Field(default=0, ge=0, le=10)
     use_llm: bool = True
 
 
@@ -149,6 +153,10 @@ class AskResult(BaseModel):
     bookmarks: list[dict] = Field(default_factory=list)
     provider: str = ""
     model: str = ""
+    # Where the *query string* gets embedded. When this is anything other
+    # than "local", the user's query leaves the machine on every Ask —
+    # even with `use_llm: false`. Surfaced so the UI can disclose it.
+    embeddings_provider: str = "local"
 
 
 # ─── Bookmark service ─────────────────────────────────────────────────────────
@@ -454,9 +462,41 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         allow_headers=["*"],
         **cors_kwargs,
     )
+
+    # Host header allow-list — stops DNS-rebinding attacks. CORS only protects
+    # against cross-origin *reads*; a malicious page can rebind its own
+    # hostname to 127.0.0.1, then the browser treats requests to localhost as
+    # same-origin (no CORS preflight) but sends the original `Host:
+    # attacker.example` header. Without this middleware, those requests would
+    # reach /api/ask and exfiltrate bookmarks. Users can add custom names via
+    # [web].allowed_hosts; "*" disables the check.
+    allowed_hosts_cfg = [str(h).strip() for h in (web_cfg.get("allowed_hosts") or [])
+                         if str(h).strip()]
+    if "*" in allowed_hosts_cfg:
+        allowed_hosts: list[str] = ["*"]
+    else:
+        allowed_hosts = sorted({
+            "localhost", "127.0.0.1", "[::1]",
+            f"localhost:{web_port}", f"127.0.0.1:{web_port}", f"[::1]:{web_port}",
+            *([web_host, f"{web_host}:{web_port}"]
+              if web_host and web_host not in ("0.0.0.0", "::", "") else []),
+            *allowed_hosts_cfg,
+        })
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
     app.state.config_path = config_path
     app.state.cfg = cfg
     app.state.svc = svc
+
+    # Disclose remote embedding once at boot — easy to miss that toggling off
+    # the LLM doesn't keep the query string local when `embeddings.provider`
+    # is OpenAI.
+    em_provider = str(cfg.get("embeddings", {}).get("provider", "local")).lower()
+    if em_provider and em_provider != "local":
+        log.warning("remote_embeddings_active",
+                    extra={"provider": em_provider})
+        print(f"  [ask] embeddings.provider = {em_provider!r} — every Ask "
+              f"query is sent to {em_provider} for embedding, even with "
+              f"'use_llm: false'.")
 
     # ── routes ───────────────────────────────────────────────────────────────
 
@@ -987,6 +1027,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             bookmarks=hits,
             provider=str(llm_cfg.get("provider", "")),
             model=str(llm_cfg.get("model", "")),
+            embeddings_provider=str(cfg.get("embeddings", {}).get("provider", "local")),
         )
         if not q.use_llm or not hits:
             return result
