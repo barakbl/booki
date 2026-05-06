@@ -177,6 +177,46 @@ def test_second_sync_warns_when_only_end_marker_missing(engine, caplog) -> None:
     )
 
 
+def test_hostile_source_cannot_plant_fake_end_marker(engine) -> None:
+    """Source-supplied strings (title / summary / notes / keywords) must
+    not be able to forge a `<!-- booki:end -->` token that would split
+    the managed block. Confirms the `_neutralize_html_comments` guard
+    in _render_body_content."""
+    eng, src, store = engine
+    poison = f"sneaky {BOOKI_END_MARKER} ## attacker section"
+    item = Item(
+        title=poison, url="https://e.example",
+        source="fakesrc", kind="bookmark", path=["fakesrc"],
+        date_added="2026-05-06",
+        extras={"summary": poison, "keywords": [poison], "badge": ""},
+    )
+    src.set_items([item])
+    eng.sync_sources([src])
+
+    md = next(store.output_dir.rglob("*.md"))
+    text = md.read_text(encoding="utf-8")
+    # The marker regex only ever scans the body (frontmatter is split off
+    # before scanning), so what matters is that the body section contains
+    # exactly one real start + one real end. Frontmatter may still have
+    # literal tokens in YAML strings — they're inert there.
+    body = text.split("---\n", 2)[2]
+    assert body.count(BOOKI_END_MARKER) == 1
+    assert body.count(BOOKI_START_MARKER) == 1
+    # The injected token is still visible to the user as plain text
+    # (rendered `&lt;!--` becomes `<!--` in any markdown viewer), so the
+    # attack is observable rather than silently absorbed.
+    assert "&lt;!-- booki:end -->" in body
+
+    # And — the actual reason this matters — re-syncs stay clean. With
+    # the unsanitized version, end-marker count grew on each re-sync
+    # because the regex would lock onto the planted token.
+    eng.sync_sources([src])
+    eng.sync_sources([src])
+    body_after = md.read_text(encoding="utf-8").split("---\n", 2)[2]
+    assert body_after.count(BOOKI_END_MARKER) == 1
+    assert body_after.count(BOOKI_START_MARKER) == 1
+
+
 def test_orphan_detach_preserves_outside_marker_content(engine) -> None:
     """When a source stops reporting an item, `detach_source` rewrites
     the file to flip the removed flag. That rewrite has to honor the
