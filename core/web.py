@@ -380,6 +380,37 @@ def _is_within(target: Path, root: Path) -> bool:
         return False
 
 
+def _resolve_runtime_token_path(port: int) -> Path:
+    """Pick a writable, user-private location for the shutdown token.
+
+    Order of preference:
+      1. $XDG_RUNTIME_DIR/booki/shutdown-<port>.token  — Linux session dir
+         (typically /run/user/$UID, already 0700).
+      2. ~/.cache/booki/shutdown-<port>.token         — XDG fallback.
+      3. tempfile.gettempdir()/booki-<uid>-shutdown-<port>.token
+         — last resort (still chmod 0600 by caller).
+    """
+    import getpass
+    import os as _os
+    import tempfile
+
+    name = f"shutdown-{int(port)}.token"
+    runtime_dir = _os.environ.get("XDG_RUNTIME_DIR", "").strip()
+    if runtime_dir:
+        try:
+            p = Path(runtime_dir) / "booki" / name
+            return p
+        except (OSError, ValueError):
+            pass
+    cache_home = _os.environ.get("XDG_CACHE_HOME", "").strip() or str(Path.home() / ".cache")
+    try:
+        return Path(cache_home) / "booki" / name
+    except (OSError, ValueError):
+        pass
+    user = getpass.getuser() if hasattr(getpass, "getuser") else "anon"
+    return Path(tempfile.gettempdir()) / f"booki-{user}-{name}"
+
+
 def _resolved_log_path(cfg: dict) -> Optional[Path]:
     """Resolve `[logs].file` the same way core.logs.setup_logging does."""
     s = ((cfg.get("logs", {}) or {}).get("file") or "").strip()
@@ -540,20 +571,42 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
     def health():
         return {"ok": True, "count": len(svc._index), "bookmarks_dir": str(svc.dir)}
 
+    # Per-process shutdown token. Generated at create_app() time and
+    # written to a 0600 file under XDG_RUNTIME_DIR (or $TMPDIR / /tmp
+    # as a fallback). The booki-manager tray app reads it from the
+    # same file. Unauthenticated requests get 401 — without this any
+    # local process (browser extension, curl, malicious VS Code task)
+    # could SIGTERM the server. (P1-05)
+    import secrets as _secrets
+    _shutdown_token = _secrets.token_urlsafe(32)
+    _token_path = _resolve_runtime_token_path(web_port)
+    try:
+        _token_path.parent.mkdir(parents=True, exist_ok=True)
+        _token_path.write_text(_shutdown_token, encoding="utf-8")
+        try:
+            import os as _os
+            _os.chmod(_token_path, 0o600)
+        except OSError:
+            pass
+        log.info("shutdown_token_written", extra={"path": str(_token_path)})
+    except OSError:
+        log.warning("shutdown_token_write_failed",
+                    extra={"path": str(_token_path)})
+
+    from fastapi import Header
+
     @app.post("/api/shutdown")
-    def shutdown():
+    def shutdown(authorization: Optional[str] = Header(default=None)):
         """Trigger a clean uvicorn shutdown.
 
-        Used by the Rust booki-manager's tray menu (Web interface →
-        Stop / Restart) so the manager can stop *any* booki web server,
-        including ones it didn't spawn itself. The HTTP path is portable
-        (no PID hunting) and lets uvicorn drain in-flight requests
-        before exiting.
-
-        Implementation: send SIGTERM to our own process from a tiny
-        background thread. The current request returns first; uvicorn's
-        signal handler then runs the lifespan-shutdown sequence.
+        Caller must present `Authorization: Bearer <token>` matching the
+        per-process token written to the runtime token file. The
+        booki-manager reads this file when it's started by the same
+        user; nobody else should have read access (chmod 0600).
         """
+        expected = f"Bearer {_shutdown_token}"
+        if not authorization or not _secrets.compare_digest(authorization, expected):
+            raise HTTPException(401, "Unauthorized — present the per-process shutdown token.")
         import os, signal, threading
         threading.Thread(
             target=lambda: (time.sleep(0.05), os.kill(os.getpid(), signal.SIGTERM)),
