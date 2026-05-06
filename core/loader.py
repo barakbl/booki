@@ -252,9 +252,11 @@ def load_bookmark_full(path: Path) -> tuple[Optional[dict], list[LoadError]]:
         if not s or s.startswith("#") or s.startswith("---"):
             continue
         if ":" not in raw_line:
+            snippet = s if len(s) <= 120 else s[:117] + "…"
             errors.append(LoadError(
                 path=str(path), kind="yaml",
-                message=f"line {i}: missing `:` — expected `key: value`",
+                message=f"line {i}: missing `:` — expected `key: value` "
+                        f"(got: {snippet!r})",
                 line=i,
             ))
 

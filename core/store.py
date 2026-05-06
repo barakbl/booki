@@ -152,10 +152,16 @@ def _yaml_str(val) -> str:
     #     potentially be reinterpreted as a key on the next read. Forcing
     #     a JSON-string round-trip neutralises every such case.
     has_ctrl = any(ord(c) < 0x20 or ord(c) == 0x7f for c in s)
+    # A bare scalar that round-trips as a non-string (int/bool) is also a
+    # type-coercion bug — quote anything our parser would re-read as such.
+    looks_like_int = s.lstrip("-").isdigit()
+    looks_like_bool = s.lower() in ("true", "false")
     needs_quote = (
         any(c in s for c in ':#{}[]&*!|>\'",%@`\\')
         or s != s.strip()
         or has_ctrl
+        or looks_like_int
+        or looks_like_bool
     )
     return json.dumps(s) if needs_quote else s
 
