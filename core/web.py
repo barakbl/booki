@@ -1055,11 +1055,15 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
 
     exclude_filter = ExcludeFilter.from_cfg(cfg)
 
+    _security_cfg = (cfg.get("security", {}) or {})
+    _allow_internal = bool(_security_cfg.get("allow_internal_targets", False))
+
     @app.post("/api/link", response_model=LinkAddResponse)
     def add_link(req: LinkAddRequest):
         try:
             path, is_new, title = sync_link(
                 req.url, svc.store, title=req.title, exclude=exclude_filter,
+                allow_internal_targets=_allow_internal,
             )
         except LinkExcluded as e:
             raise HTTPException(409, f"Excluded — {e.reason}")
