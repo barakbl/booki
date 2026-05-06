@@ -102,14 +102,12 @@ def _bookmarks_dir(cfg: dict) -> Path:
 
 
 def _parse_frontmatter(path: Path) -> dict | None:
-    try:
-        content = path.read_text(encoding="utf-8")
-    except Exception:
-        return None
-    m = FRONTMATTER_RE.match(content)
-    if not m:
-        return None
-    return _parse_yaml_block(m.group(1))
+    """Robust load — broken frontmatter just yields None instead of raising
+    so a single bad file doesn't poison the whole fzf list. Loader handles
+    error reporting; for browse we only need the success path."""
+    from .loader import load_bookmark
+    fm, _err = load_bookmark(path)
+    return fm
 
 
 def _iter_items(bookmarks_dir: Path):

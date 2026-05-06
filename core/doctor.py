@@ -37,9 +37,10 @@ except ImportError:
 import plugins
 from .ingest import (
     chromadb_installed,
-    parse_bookmark_file,
     vector_db_enabled,
 )
+from .loader import LoadError, scan_bookmarks
+from .store import view_fm
 from .sync import _is_disabled
 
 log = logging.getLogger("booki.doctor")
@@ -128,6 +129,8 @@ def _scan_library(bookmarks_dir: Path) -> dict:
         by_kind            — {kind: count}
         last_sync_by_source — {source_slug: "YYYY-MM-DD"}
         last_sync_global   — "YYYY-MM-DD" (max across all items)
+        scanned            — int (total .md files seen, valid + broken)
+        errors             — list[LoadError] (every parse problem)
     """
     out = {
         "total": 0, "enriched": 0, "dead": 0, "removed": 0,
@@ -135,14 +138,20 @@ def _scan_library(bookmarks_dir: Path) -> dict:
         "by_kind": defaultdict(int),
         "last_sync_by_source": {},
         "last_sync_global": "",
+        "scanned": 0,
+        "errors": [],
     }
     if not bookmarks_dir.exists():
         return out
 
+    scan = scan_bookmarks(bookmarks_dir)
+    out["scanned"] = scan.scanned
+    out["errors"] = scan.errors
+
     last_sync_by: dict[str, str] = {}
-    for md in bookmarks_dir.rglob("*.md"):
-        fm = parse_bookmark_file(md)
-        if not fm or not fm.get("url"):
+    for md, raw_fm in scan.items:
+        fm = view_fm(raw_fm)
+        if not fm.get("url"):
             continue
         out["total"] += 1
         if str(fm.get("summary", "") or "").strip():
@@ -419,6 +428,63 @@ def _print_library(s: Style, cfg: dict, lib: dict, db_count: Optional[int]) -> N
              "your notes / tags are preserved")
 
 
+def _print_corrupted(s: Style, lib: dict, bookmarks_dir: Path) -> None:
+    """List files we couldn't parse — the user-facing fix list.
+
+    Schema warnings (wrong field types in an otherwise-loadable file) are
+    grouped separately from hard skips (read errors / missing or unclosed
+    frontmatter), since the former still made it into the index.
+    """
+    errors: list[LoadError] = lib.get("errors", []) or []
+    if not errors:
+        return
+
+    by_path: dict[str, list[LoadError]] = defaultdict(list)
+    for e in errors:
+        by_path[e.path].append(e)
+
+    skipped_paths = sorted(p for p, errs in by_path.items()
+                           if any(er.kind != "schema" for er in errs))
+    schema_only = sorted(p for p, errs in by_path.items()
+                         if all(er.kind == "schema" for er in errs))
+
+    scanned = lib.get("scanned", 0)
+    _section(s, "Corrupted files", "🩹")
+
+    if skipped_paths:
+        n = len(skipped_paths)
+        _row(s, GBAD, "red",
+             f"{_human_count(n)} of {_human_count(scanned)} file(s) skipped",
+             "couldn't parse — fix and re-run `booki ingest`")
+        for p in skipped_paths:
+            rel = _rel_to(p, bookmarks_dir)
+            blocking = next((er for er in by_path[p] if er.kind != "schema"), None)
+            kind = blocking.kind if blocking else "?"
+            msg = blocking.short() if blocking else ""
+            print(f"       {s.dim('·')} {s.bold(rel)}  "
+                  f"{s.dim('[' + kind + ']')}  {msg}")
+
+    if schema_only:
+        n = len(schema_only)
+        _row(s, GWARN, "yellow",
+             f"{_human_count(n)} file(s) with schema warnings",
+             "loaded but have wrong field types")
+        for p in schema_only[:10]:  # cap — rare in practice but be polite
+            rel = _rel_to(p, bookmarks_dir)
+            details = "; ".join(er.short() for er in by_path[p][:3])
+            print(f"       {s.dim('·')} {s.bold(rel)}  {s.dim(details)}")
+        if len(schema_only) > 10:
+            print(f"       {s.dim('… and ' + str(len(schema_only) - 10) + ' more')}")
+
+
+def _rel_to(path_str: str, root: Path) -> str:
+    """Display path relative to the bookmarks dir when possible."""
+    try:
+        return str(Path(path_str).relative_to(root))
+    except ValueError:
+        return path_str
+
+
 def _bar(pct: int, *, width: int = 14) -> str:
     """Mini progress bar `[████░░░░░░░░░░]` — dim helper, no color."""
     pct = max(0, min(100, pct))
@@ -432,6 +498,14 @@ def _print_suggestions(s: Style, cfg: dict, lib: dict, db_count: Optional[int],
                        sys_payload: dict) -> None:
     """Data-driven nudges. We bias toward fewer, more targeted suggestions."""
     tips: list[tuple[str, str]] = []   # (priority_color, message)
+
+    # 0. Corrupted files — surface this above everything else when present,
+    # since a broken file is silently dropped from search until it's fixed.
+    skipped = sorted({e.path for e in lib.get("errors", []) if e.kind != "schema"})
+    if skipped:
+        tips.append(("red",
+            f"fix or remove {_human_count(len(skipped))} corrupted "
+            f"bookmark file(s) — see 'Corrupted files' above"))
 
     # 1. Empty library — the only thing to do is sync.
     if lib["total"] == 0:
@@ -546,6 +620,7 @@ def run(cfg: dict, config_path: Path, *, color: bool) -> int:
     _print_paths(s, cfg, config_path, bookmarks_dir, db_dir)
     _print_sources(s, cfg, lib)
     _print_library(s, cfg, lib, db_count)
+    _print_corrupted(s, lib, bookmarks_dir)
     _print_suggestions(s, cfg, lib, db_count, sys_payload)
     _footer(s, width)
     return 0

@@ -37,7 +37,8 @@ from pydantic import BaseModel, Field, field_validator
 
 # Reuse parsers / writers from the CLI tools.
 from .ingest import FRONTMATTER_RE, bm_id, parse_bookmark_file
-from .store import ItemStore, today_str
+from .loader import LoadError, scan_bookmarks
+from .store import ItemStore, today_str, view_fm
 import plugins as _plugins_pkg  # noqa: F401 — triggers plugin registration
 from plugins.base import iter_enrichers, iter_registered, iter_tabs
 from .download import DownloadConfig, download_one, update_md_for_download
@@ -162,17 +163,31 @@ class BookmarkService:
         self.dir = bookmarks_dir
         self.store = ItemStore(bookmarks_dir)
         self._index: dict[str, tuple[Path, dict]] = {}
+        # Errors from the most recent scan — broken files, schema mismatches.
+        # Surfaced via /api/library/errors and rendered as a banner in the
+        # search header so users notice files quietly disappearing from the
+        # index instead of just seeing a smaller count.
+        self._errors: list[LoadError] = []
+        self._scanned: int = 0
         self.refresh()
 
     def refresh(self) -> None:
         self._index.clear()
+        self._errors = []
+        self._scanned = 0
         if not self.dir.exists():
             return
-        for md_file in sorted(self.dir.rglob("*.md")):
-            fm = parse_bookmark_file(md_file)
-            if not fm or not fm.get("url"):
+        scan = scan_bookmarks(self.dir)
+        self._errors = scan.errors
+        self._scanned = scan.scanned
+        for path, raw_fm in scan.items:
+            fm = view_fm(raw_fm)
+            if not fm.get("url"):
                 continue
-            self._index[bm_id(fm)] = (md_file, fm)
+            self._index[bm_id(fm)] = (path, fm)
+
+    def errors(self) -> list[LoadError]:
+        return list(self._errors)
 
     def list(self) -> list[Bookmark]:
         self.refresh()
@@ -678,6 +693,12 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             ls = str(fm.get("last_sync", "") or "")
             if ls > last_sync:
                 last_sync = ls
+        # Bubble up corrupted-file counts so the search UI can render a
+        # banner without a separate request — `errors_count` is the number
+        # of *files* skipped, not the raw error count.
+        errs = svc.errors()
+        skipped_paths = {e.path for e in errs if e.kind != "schema"}
+        schema_paths = {e.path for e in errs if e.kind == "schema"}
         return {
             "total": len(svc._index),
             "enriched": enriched,
@@ -685,6 +706,36 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             "by_source": by_source,
             "by_kind": by_kind,
             "bookmarks_dir": str(svc.dir),
+            "scanned": svc._scanned,
+            "errors_count": len(skipped_paths),
+            "schema_warnings_count": len(schema_paths),
+        }
+
+    @app.get("/api/library/errors")
+    def library_errors():
+        """List every parse/schema problem from the most recent scan.
+
+        Each entry is the serialised `LoadError` plus a `rel_path` for
+        display. The frontend renders this in the Manage > Doctor tab so
+        users can click through and fix corrupted files.
+        """
+        svc.refresh()
+        out: list[dict] = []
+        for e in svc.errors():
+            d = e.to_dict()
+            try:
+                d["rel_path"] = str(Path(e.path).relative_to(svc.dir))
+            except ValueError:
+                d["rel_path"] = e.path
+            out.append(d)
+        # Sort: blocking errors first (they actually break the index),
+        # then schema warnings, then by path for stable ordering.
+        out.sort(key=lambda d: (d["kind"] == "schema", d["rel_path"]))
+        return {
+            "scanned": svc._scanned,
+            "skipped": len({e.path for e in svc.errors() if e.kind != "schema"}),
+            "schema_warnings": len({e.path for e in svc.errors() if e.kind == "schema"}),
+            "errors": out,
         }
 
     @app.get("/api/bookmarks", response_model=list[Bookmark])

@@ -2573,6 +2573,13 @@ Tabs.register({
           </div>
           <p class="status-platform" id="statusPlatform"></p>
           <div class="status-summary" id="statusSummary"></div>
+          <section id="corruptedFilesPanel" class="corrupt-panel" hidden>
+            <header class="corrupt-head">
+              <h3>🩹 Corrupted bookmark files</h3>
+              <p class="hint-text" id="corruptSummary"></p>
+            </header>
+            <div id="corruptList" class="corrupt-list"></div>
+          </section>
           <div class="status-body" id="statusBody">
             <p class="hint-text">Loading…</p>
           </div>
@@ -3357,6 +3364,155 @@ async function loadStatus() {
   } catch (e) {
     statusEls.body.innerHTML = `<p class="hint-text">Failed to load: ${escapeHtml(e.message)}</p>`;
   }
+  // Refresh the corrupted-files panel alongside system checks — they're
+  // both diagnostic and the user expects ↻ to refresh the whole page.
+  loadLibraryErrors();
+}
+
+// ─── Corrupted bookmark files ──────────────────────────────────────
+//
+// Banner above the tab bar: visible whenever any file is unreadable, so a
+// user who doesn't open Manage still notices a regression. Click to jump
+// to the full list. The Manage > Doctor subtab renders the same payload
+// in detail with structured per-field reasons.
+
+let _lastErrorsPayload = null;
+
+async function loadLibraryErrors() {
+  try {
+    const r = await fetch("/api/library/errors");
+    if (!r.ok) return;
+    const data = await r.json();
+    _lastErrorsPayload = data;
+    renderHealthBanner(data);
+    renderCorruptedPanel(data);
+  } catch { /* health is informational — never blocks the UI */ }
+}
+
+function renderHealthBanner(data) {
+  const el = document.getElementById("libraryHealthBanner");
+  if (!el) return;
+  const skipped = data.skipped || 0;
+  const scanned = data.scanned || 0;
+  const schema = data.schema_warnings || 0;
+  if (skipped === 0 && schema === 0) {
+    el.hidden = true;
+    el.classList.add("hidden");
+    el.innerHTML = "";
+    return;
+  }
+  // Tone the banner by severity — schema-only warnings are yellow, hard
+  // skips (the file genuinely vanished from search) are red.
+  const severity = skipped > 0 ? "danger" : "warn";
+  const lines = [];
+  if (skipped > 0) {
+    lines.push(`<strong>Skipped ${skipped} of ${scanned} bookmark files</strong> due to parse errors.`);
+  }
+  if (schema > 0) {
+    lines.push(`${schema} file(s) loaded with field-type warnings.`);
+  }
+  el.hidden = false;
+  el.classList.remove("hidden");
+  el.dataset.severity = severity;
+  el.innerHTML = `
+    <span class="lib-banner-icon">${skipped > 0 ? "⚠" : "ℹ"}</span>
+    <div class="lib-banner-text">
+      ${lines.join(" ")}
+    </div>
+    <button type="button" class="btn lib-banner-action" id="libBannerOpen">View details →</button>
+    <button type="button" class="lib-banner-close" id="libBannerClose" aria-label="Dismiss">✕</button>
+  `;
+  document.getElementById("libBannerOpen")?.addEventListener("click", () => {
+    Tabs.activate("manage");
+    setTimeout(() => {
+      try { setManageSubtab("status"); } catch {}
+      const panel = document.getElementById("corruptedFilesPanel");
+      panel?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 60);
+  });
+  document.getElementById("libBannerClose")?.addEventListener("click", () => {
+    el.hidden = true;
+    el.classList.add("hidden");
+  });
+}
+
+function renderCorruptedPanel(data) {
+  const panel = document.getElementById("corruptedFilesPanel");
+  if (!panel) return;   // Manage tab not mounted yet.
+  const list = document.getElementById("corruptList");
+  const summary = document.getElementById("corruptSummary");
+  const errors = data.errors || [];
+  if (errors.length === 0) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  // Group all errors per file so a single file with three schema problems
+  // renders as one entry with three bulleted reasons.
+  const byFile = new Map();
+  for (const e of errors) {
+    const key = e.path;
+    if (!byFile.has(key)) byFile.set(key, { rel: e.rel_path || e.path, path: e.path, errs: [] });
+    byFile.get(key).errs.push(e);
+  }
+  const skipped = data.skipped || 0;
+  const schema = data.schema_warnings || 0;
+  const scanned = data.scanned || 0;
+  summary.textContent =
+    `${skipped} skipped, ${schema} with schema warnings, out of ${scanned} scanned.`;
+
+  const blocking = [...byFile.values()].filter(f => f.errs.some(e => e.kind !== "schema"));
+  const schemaOnly = [...byFile.values()].filter(f => f.errs.every(e => e.kind === "schema"));
+
+  list.innerHTML = "";
+  if (blocking.length) {
+    list.appendChild(_renderCorruptGroup(
+      "Skipped from search index", "danger", blocking,
+    ));
+  }
+  if (schemaOnly.length) {
+    list.appendChild(_renderCorruptGroup(
+      "Loaded with field-type warnings", "warn", schemaOnly,
+    ));
+  }
+}
+
+function _renderCorruptGroup(title, severity, files) {
+  const wrap = document.createElement("section");
+  wrap.className = `corrupt-group corrupt-${severity}`;
+  wrap.innerHTML = `<h4>${escapeHtml(title)} <span class="hint-text">(${files.length})</span></h4>`;
+  const ul = document.createElement("ul");
+  for (const f of files) {
+    const li = document.createElement("li");
+    li.className = "corrupt-item";
+    const reasons = f.errs.map(e => {
+      if (e.kind === "schema" && e.field) {
+        return `<li><code>${escapeHtml(e.field)}</code> should be <em>${escapeHtml(e.expected || "?")}</em>, got <em>${escapeHtml(e.got || "?")}</em></li>`;
+      }
+      const prefix = e.line ? `line ${e.line}: ` : "";
+      return `<li><span class="corrupt-kind">[${escapeHtml(e.kind)}]</span> ${escapeHtml(prefix + e.message)}</li>`;
+    }).join("");
+    // file:// link lets the user open in their default editor; we expose
+    // both that and a copy-to-clipboard fallback because some browsers
+    // (notably Chrome) refuse file:// links from an HTTP origin.
+    const fileUrl = "file://" + encodeURI(f.path).replace(/^file:\/\//, "");
+    li.innerHTML = `
+      <header class="corrupt-item-head">
+        <code class="corrupt-path" title="${escapeHtml(f.path)}">${escapeHtml(f.rel)}</code>
+        <div class="corrupt-actions">
+          <a class="btn btn-sm" href="${fileUrl}" target="_blank" rel="noopener" title="Open in default editor (file://)">Open</a>
+          <button type="button" class="btn btn-sm corrupt-copy" data-path="${escapeHtml(f.path)}">Copy path</button>
+        </div>
+      </header>
+      <ul class="corrupt-reasons">${reasons}</ul>
+    `;
+    li.querySelector(".corrupt-copy")?.addEventListener("click", (ev) => {
+      copyToClipboard(f.path, ev.currentTarget);
+    });
+    ul.appendChild(li);
+  }
+  wrap.appendChild(ul);
+  return wrap;
 }
 
 // ─── Boot ──────────────────────────────────────────────────────────
@@ -3380,7 +3536,7 @@ window.addEventListener("hashchange", () => {
 });
 
 loadKinds();
-loadSchema().then(loadBookmarks).then(loadStats).catch(err => {
+loadSchema().then(loadBookmarks).then(loadStats).then(loadLibraryErrors).catch(err => {
   els.count.textContent = `Error: ${err.message}`;
 });
 
