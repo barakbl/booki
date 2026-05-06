@@ -123,16 +123,31 @@ class Job:
         return d
 
 
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
 class JobStore:
     """File-backed store under `<exports_root>/jobs/`. Thread-safe."""
 
     def __init__(self, dir_: Path):
         self.dir = dir_
         self.dir.mkdir(parents=True, exist_ok=True)
+        self._dir_resolved = self.dir.resolve()
         self._lock = threading.Lock()
 
     def _path(self, jid: str) -> Path:
-        return self.dir / f"{jid}.md"
+        # Same path-traversal guard as TaskStore (P1-01). `jid` reaches us
+        # from /api/jobs/{jid} unvalidated; without the regex + relative_to
+        # check, a jid like `../../etc/hosts` lets `_read` open arbitrary
+        # `.md` files and `delete` unlink them.
+        if not _JOB_ID_RE.match(jid or ""):
+            return self.dir / f"{uuid.uuid4().hex}__invalid.md"
+        p = self.dir / f"{jid}.md"
+        try:
+            p.resolve().relative_to(self._dir_resolved)
+        except (ValueError, OSError):
+            return self.dir / f"{uuid.uuid4().hex}__invalid.md"
+        return p
 
     def list(self) -> list[Job]:
         out: list[Job] = []

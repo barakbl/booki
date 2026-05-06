@@ -186,8 +186,22 @@ def list_themes(kind: str, themes_root: Path) -> list[Theme]:
     return [Theme.from_dir(kind, d) for d in sorted(base.iterdir()) if d.is_dir()]
 
 
+_THEME_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
 def get_theme(kind: str, slug: str, themes_root: Path) -> Optional[Theme]:
-    p = _themes_dir(kind, themes_root) / slug
+    # Block path-traversal via slug. Without this guard,
+    # `slug = "../../../etc"` makes `p` resolve outside themes_root,
+    # and the `/themes/{kind}/{slug}/thumbnail` endpoint becomes a
+    # read primitive for any file named thumbnail.png. (P1-02)
+    if not _THEME_SLUG_RE.match(slug or ""):
+        return None
+    base = _themes_dir(kind, themes_root).resolve()
+    p = (base / slug).resolve()
+    try:
+        p.relative_to(base)
+    except (ValueError, OSError):
+        return None
     if not p.is_dir():
         return None
     return Theme.from_dir(kind, p)
@@ -516,16 +530,39 @@ class Task:
         return d
 
 
+_TASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _validate_task_id(task_id: str) -> None:
+    """Reject any task id that could escape the tasks dir or smuggle a
+    null byte through `Path` joining. The route signature also enforces
+    the regex via Pydantic validators where it can; this is the load-
+    bearing guard for path-traversal — `Path(self.dir) / f"{tid}.md"`
+    would otherwise happily resolve to `../../etc/hosts.md`. (P1-01)"""
+    if not _TASK_ID_RE.match(task_id or ""):
+        raise HTTPException(404, "task not found")
+
+
 class TaskStore:
     """Reads / writes task .md files. Thread-safe via a lock per file write."""
 
     def __init__(self, tasks_dir: Path):
         self.dir = tasks_dir
         self.dir.mkdir(parents=True, exist_ok=True)
+        self._dir_resolved = self.dir.resolve()
         self._lock = threading.Lock()
 
     def _path(self, task_id: str) -> Path:
-        return self.dir / f"{task_id}.md"
+        _validate_task_id(task_id)
+        p = self.dir / f"{task_id}.md"
+        # Defense-in-depth: even with the regex guard, assert the resolved
+        # path stays inside `dir`. Any future tweak to the validator can't
+        # reintroduce traversal without also breaking this check.
+        try:
+            p.resolve().relative_to(self._dir_resolved)
+        except (ValueError, OSError):
+            raise HTTPException(404, "task not found")
+        return p
 
     def list(self) -> list[Task]:
         if not self.dir.is_dir():
