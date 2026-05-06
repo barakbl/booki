@@ -131,22 +131,25 @@ def _parse_yaml_block(block: str) -> dict:
 # ─── Bookmark file → document ─────────────────────────────────────────────────
 
 def parse_bookmark_file(path: Path) -> dict | None:
-    """Return frontmatter dict, or None if the file lacks a frontmatter block.
+    """Return frontmatter dict, or None if the file lacks a frontmatter block
+    or is otherwise unreadable.
 
     The returned dict is the *view* — any `user:` override block is overlaid
     on top of the authoritative top-level fields. All readers (search, ingest,
     export, CLI display) use this so user edits shadow source / enricher
     values uniformly.
+
+    Backed by `core.loader.load_bookmark`, which captures structured errors
+    so corrupted files can be surfaced to the user instead of silently
+    disappearing. Callers that want the error detail should use the loader
+    directly.
     """
-    try:
-        content = path.read_text(encoding="utf-8")
-    except Exception:
-        return None
-    m = FRONTMATTER_RE.match(content)
-    if not m:
-        return None
+    from .loader import load_bookmark
     from .store import view_fm
-    return view_fm(_parse_yaml_block(m.group(1)))
+    fm, _err = load_bookmark(path)
+    if fm is None:
+        return None
+    return view_fm(fm)
 
 
 def build_document(fm: dict) -> str:
@@ -245,24 +248,50 @@ def bm_metadata(fm: dict) -> dict:
 
 # ─── Loading ──────────────────────────────────────────────────────────────────
 
-def load_all_bookmarks(bookmarks_dir: Path, min_importance: int) -> list[dict]:
-    # Dedupe by URL — keep the copy with the highest importance (rare, but e.g.
-    # same URL in multiple browsers or folders).
+def load_all_bookmarks(
+    bookmarks_dir: Path, min_importance: int
+) -> tuple[list[dict], list]:
+    """Load every usable bookmark for ingest. Returns `(bookmarks, errors)`.
+
+    `errors` is the list of `LoadError`s collected during the scan — file-level
+    skips and per-field schema warnings. Ingest reports the count to the user
+    so a wave of broken files isn't silently dropped from the search index.
+
+    Dedupe by URL — keep the copy with the highest importance (rare, but e.g.
+    same URL in multiple browsers or folders).
+    """
+    from .loader import scan_bookmarks
+    from .store import view_fm
+
+    scan = scan_bookmarks(bookmarks_dir)
     seen: dict[str, dict] = {}
-    for md_file in sorted(bookmarks_dir.rglob("*.md")):
-        fm = parse_bookmark_file(md_file)
-        if not fm:
-            continue
+    for _path, raw_fm in scan.items:
+        fm = view_fm(raw_fm)
         if fm.get("removed_from_browser") or fm.get("removed_from_source"):
             continue
         if not fm.get("url"):
             continue
-        if int(fm.get("importance", 0)) < min_importance:
+        # `importance` may be a non-int if the file has a schema error — the
+        # loader has already flagged it; coerce defensively here so a single
+        # broken file doesn't crash the whole ingest.
+        try:
+            imp = int(fm.get("importance", 0) or 0)
+        except (TypeError, ValueError):
+            imp = 0
+        if imp < min_importance:
             continue
         key = str(fm.get("url", "")).rstrip("/").lower()
-        if key not in seen or int(fm.get("importance", 0)) > int(seen[key].get("importance", 0)):
+        prev = seen.get(key)
+        if prev is None:
             seen[key] = fm
-    return list(seen.values())
+        else:
+            try:
+                prev_imp = int(prev.get("importance", 0) or 0)
+            except (TypeError, ValueError):
+                prev_imp = 0
+            if imp > prev_imp:
+                seen[key] = fm
+    return list(seen.values()), scan.errors
 
 
 # ─── Embeddings ───────────────────────────────────────────────────────────────
@@ -324,9 +353,21 @@ def ingest(cfg: dict, reset: bool = False) -> None:
     })
     t0 = time.monotonic()
 
-    bookmarks = load_all_bookmarks(bookmarks_dir, min_importance)
+    bookmarks, load_errors = load_all_bookmarks(bookmarks_dir, min_importance)
     enriched_count = sum(1 for b in bookmarks if b.get("last_enriched"))
     print(f"  Loaded {len(bookmarks)} bookmark(s) — {enriched_count} enriched")
+    if load_errors:
+        # Distinguish files we *skipped entirely* (read/parse failures) from
+        # ones we still indexed but flagged for schema warnings — the user
+        # cares more about the former.
+        skipped_paths = {e.path for e in load_errors if e.kind != "schema"}
+        schema_count = sum(1 for e in load_errors if e.kind == "schema")
+        if skipped_paths:
+            print(f"  ⚠ Skipped {len(skipped_paths)} file(s) due to parse errors. "
+                  f"Run `booki doctor` to see the list.")
+        if schema_count:
+            print(f"  ⚠ {schema_count} schema warning(s) "
+                  f"(e.g. wrong field types). Run `booki doctor` for details.")
     if not bookmarks:
         print("Nothing to index. Run `booki sync` first.")
         log.info("ingest_finished", extra={
@@ -374,6 +415,8 @@ def ingest(cfg: dict, reset: bool = False) -> None:
         "enriched":       enriched_count,
         "collection_size": final_count,
         "reset":          bool(reset),
+        "skipped":        len({e.path for e in load_errors if e.kind != "schema"}),
+        "schema_warnings": sum(1 for e in load_errors if e.kind == "schema"),
         "duration_s":    round(time.monotonic() - t0, 3),
     })
 

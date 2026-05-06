@@ -37,7 +37,8 @@ from pydantic import BaseModel, Field, field_validator
 
 # Reuse parsers / writers from the CLI tools.
 from .ingest import FRONTMATTER_RE, bm_id, parse_bookmark_file
-from .store import ItemStore, today_str
+from .loader import LoadError, scan_bookmarks
+from .store import ItemStore, today_str, view_fm
 import plugins as _plugins_pkg  # noqa: F401 — triggers plugin registration
 from plugins.base import iter_enrichers, iter_registered, iter_tabs
 from .download import DownloadConfig, download_one, update_md_for_download
@@ -155,24 +156,94 @@ class AskResult(BaseModel):
 class BookmarkService:
     """
     In-memory index of all bookmark MD files, keyed by id (sha256(url)[:16]).
-    Re-reads from disk whenever `.refresh()` is called — cheap for O(100) files.
+
+    `refresh()` is the only entry point that touches disk. It uses an
+    mtime fingerprint — a sorted list of `(path, mtime)` for every `.md`
+    under the bookmarks dir — so repeated calls in a single page load
+    (search list, stats, library errors, …) only do the cheap
+    `stat`-each-file walk; the parse step is skipped when nothing has
+    changed. External edits (a hand-tweaked .md, a CLI `booki sync`)
+    bump file mtimes and are therefore picked up immediately on the
+    next refresh.
     """
 
     def __init__(self, bookmarks_dir: Path):
         self.dir = bookmarks_dir
         self.store = ItemStore(bookmarks_dir)
         self._index: dict[str, tuple[Path, dict]] = {}
+        # Errors from the most recent scan — broken files, schema mismatches.
+        # Surfaced via /api/library/errors and rendered as a banner in the
+        # search header so users notice files quietly disappearing from the
+        # index instead of just seeing a smaller count.
+        self._errors: list[LoadError] = []
+        self._scanned: int = 0
+        # Sorted list of `(path_str, mtime)` from the last full scan.
+        # `None` forces the next refresh to do a full re-parse (used after
+        # writes to bypass the no-change shortcut).
+        self._fingerprint: Optional[list[tuple[str, float]]] = None
         self.refresh()
 
-    def refresh(self) -> None:
-        self._index.clear()
+    def _fingerprint_dir(self) -> list[tuple[str, float]]:
+        """Walk the bookmarks dir and return a sorted (path, mtime) list.
+
+        One `stat` per `.md` file — no reads, no parsing. For a few
+        thousand files this is sub-millisecond on SSD."""
         if not self.dir.exists():
-            return
-        for md_file in sorted(self.dir.rglob("*.md")):
-            fm = parse_bookmark_file(md_file)
-            if not fm or not fm.get("url"):
+            return []
+        out: list[tuple[str, float]] = []
+        for p in sorted(self.dir.rglob("*.md")):
+            try:
+                out.append((str(p), p.stat().st_mtime))
+            except OSError:
+                # Race with deletion or a permission flip — drop from the
+                # fingerprint and let the next refresh notice when stable.
                 continue
-            self._index[bm_id(fm)] = (md_file, fm)
+        return out
+
+    def refresh(self, *, force: bool = False) -> None:
+        """Sync the in-memory index with disk.
+
+        Cheap when nothing has changed: walks each `.md` for an mtime
+        fingerprint and short-circuits when it matches the cached one.
+        Pass `force=True` after a write that bypasses mtime granularity
+        (e.g. two writes within the same filesystem-mtime tick).
+        """
+        if not self.dir.exists():
+            self._index = {}
+            self._errors = []
+            self._scanned = 0
+            self._fingerprint = []
+            return
+
+        fp = self._fingerprint_dir()
+        if not force and self._fingerprint is not None and fp == self._fingerprint:
+            # No file changed since last full parse — reuse the index.
+            return
+
+        # Something changed (or first run / forced) — re-parse.
+        scan = scan_bookmarks(self.dir, paths=[Path(p) for p, _ in fp])
+        new_index: dict[str, tuple[Path, dict]] = {}
+        for path, raw_fm in scan.items:
+            fm = view_fm(raw_fm)
+            if not fm.get("url"):
+                continue
+            new_index[bm_id(fm)] = (path, fm)
+        self._index = new_index
+        self._errors = scan.errors
+        self._scanned = scan.scanned
+        self._fingerprint = fp
+
+    def invalidate(self) -> None:
+        """Drop the cached fingerprint so the next refresh re-parses.
+
+        Use after a same-process write whose mtime change might collide
+        with the cached fingerprint (rare, but possible when a write
+        finishes inside the same filesystem-mtime tick as the prior scan).
+        """
+        self._fingerprint = None
+
+    def errors(self) -> list[LoadError]:
+        return list(self._errors)
 
     def list(self) -> list[Bookmark]:
         self.refresh()
@@ -216,7 +287,9 @@ class BookmarkService:
         # so it stays at the top level.
         self.store.update_user_fields(path, **updates)
         self.store.update_fields(path, last_sync=today_str())
-        self.refresh()
+        # Same-process writes can land within one filesystem-mtime tick of
+        # the prior scan; force the next refresh to actually re-parse.
+        self.refresh(force=True)
         return self.get(bid)
 
 
@@ -678,6 +751,12 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             ls = str(fm.get("last_sync", "") or "")
             if ls > last_sync:
                 last_sync = ls
+        # Bubble up corrupted-file counts so the search UI can render a
+        # banner without a separate request — `errors_count` is the number
+        # of *files* skipped, not the raw error count.
+        errs = svc.errors()
+        skipped_paths = {e.path for e in errs if e.kind != "schema"}
+        schema_paths = {e.path for e in errs if e.kind == "schema"}
         return {
             "total": len(svc._index),
             "enriched": enriched,
@@ -685,6 +764,36 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             "by_source": by_source,
             "by_kind": by_kind,
             "bookmarks_dir": str(svc.dir),
+            "scanned": svc._scanned,
+            "errors_count": len(skipped_paths),
+            "schema_warnings_count": len(schema_paths),
+        }
+
+    @app.get("/api/library/errors")
+    def library_errors():
+        """List every parse/schema problem from the most recent scan.
+
+        Each entry is the serialised `LoadError` plus a `rel_path` for
+        display. The frontend renders this in the Manage > Doctor tab so
+        users can click through and fix corrupted files.
+        """
+        svc.refresh()
+        out: list[dict] = []
+        for e in svc.errors():
+            d = e.to_dict()
+            try:
+                d["rel_path"] = str(Path(e.path).relative_to(svc.dir))
+            except ValueError:
+                d["rel_path"] = e.path
+            out.append(d)
+        # Sort: blocking errors first (they actually break the index),
+        # then schema warnings, then by path for stable ordering.
+        out.sort(key=lambda d: (d["kind"] == "schema", d["rel_path"]))
+        return {
+            "scanned": svc._scanned,
+            "skipped": len({e.path for e in svc.errors() if e.kind != "schema"}),
+            "schema_warnings": len({e.path for e in svc.errors() if e.kind == "schema"}),
+            "errors": out,
         }
 
     @app.get("/api/bookmarks", response_model=list[Bookmark])
@@ -753,7 +862,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             svc.store.update_user_fields(path, lists=merged)
             svc.store.update_fields(path, last_sync=today_str())
             changed += 1
-        svc.refresh()
+        svc.refresh(force=True)
         return {"renamed": changed}
 
     @app.delete("/api/lists/{name}")
@@ -770,7 +879,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             svc.store.update_user_fields(path, lists=[l for l in lists if l != name])
             svc.store.update_fields(path, last_sync=today_str())
             changed += 1
-        svc.refresh()
+        svc.refresh(force=True)
         return {"removed_from": changed}
 
     @app.post("/api/bookmarks/{bid}/download", response_model=DownloadResponse)
@@ -792,7 +901,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
                 result = download_one(detail.url, dl_cfg, audio=audio)
                 if result.ok:
                     update_md_for_download(svc.store, detail.url, result, dl_cfg)
-                    svc.refresh()
+                    svc.refresh(force=True)
                     with dl_lock:
                         dl_jobs[bid] = "done"
                 else:
@@ -839,7 +948,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             raise HTTPException(400, str(e))
         except Exception as e:
             raise HTTPException(500, f"{type(e).__name__}: {e}")
-        svc.refresh()
+        svc.refresh(force=True)
         fm = svc.store.read_frontmatter(path)
         return LinkAddResponse(id=bm_id(fm), url=str(fm.get("url", "")),
                                title=title, is_new=is_new)
