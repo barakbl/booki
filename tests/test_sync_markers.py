@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+from core.ingest import parse_bookmark_file
 from core.store import (
     BOOKI_END_MARKER,
     BOOKI_START_MARKER,
@@ -215,6 +216,42 @@ def test_hostile_source_cannot_plant_fake_end_marker(engine) -> None:
     body_after = md.read_text(encoding="utf-8").split("---\n", 2)[2]
     assert body_after.count(BOOKI_END_MARKER) == 1
     assert body_after.count(BOOKI_START_MARKER) == 1
+
+
+def test_hostile_source_cannot_inject_user_override_block(engine, caplog) -> None:
+    """The override block is `update_user_fields`'s territory only.
+    A source that tries to plant `booki_user_override` via `extras`
+    would shadow its own (or another source's) authoritative fields
+    through `view_fm`. The store must drop it on the floor and log."""
+    from core.store import USER_OVERRIDE_KEY
+
+    eng, src, store = engine
+    poison = Item(
+        title="Honest Title", url="https://e.example",
+        source="fakesrc", kind="bookmark", path=["fakesrc"],
+        date_added="2026-05-06",
+        extras={USER_OVERRIDE_KEY: {"title": "PWNED",
+                                    "url": "https://attacker"}},
+    )
+    src.set_items([poison])
+
+    import logging as _logging
+    with caplog.at_level(_logging.WARNING, logger="booki.store"):
+        eng.sync_sources([src])
+
+    md = next(store.output_dir.rglob("*.md"))
+    raw = store.read_frontmatter(md)
+    # Override block was NOT written.
+    assert USER_OVERRIDE_KEY not in raw or not raw.get(USER_OVERRIDE_KEY)
+    # View shows the honest source-supplied title (no shadowing).
+    fm = parse_bookmark_file(md)
+    assert fm["title"] == "Honest Title"
+    assert fm["url"] == "https://e.example"
+    # And the attempt was surfaced in the logs.
+    assert any(
+        "source_attempted_override_injection" in rec.message
+        for rec in caplog.records
+    )
 
 
 def test_orphan_detach_preserves_outside_marker_content(engine) -> None:

@@ -451,6 +451,11 @@ class ItemStore:
         fm = self.read_frontmatter(file_path)
         if not fm:
             return False
+        # Routing the override block through `update_fields` would let any
+        # caller bypass the `update_user_fields` invariant that overrides
+        # never touch the body. Refuse and force callers to use the
+        # dedicated method.
+        updates = {k: v for k, v in updates.items() if k != USER_OVERRIDE_KEY}
         fm.update(updates)
         new_content = self._compose_file(fm, prior_content=prior, file_path=file_path)
         if new_content != prior:
@@ -577,9 +582,18 @@ class ItemStore:
 
         if not skip_extras_overwrite:
             # Source-provided extras (authoritative — overwrite existing).
+            # USER_OVERRIDE_KEY is owned by `update_user_fields` only — a
+            # source that tries to inject it would shadow its own (or worse,
+            # another source's) authoritative fields via `view_fm`.
             for k, v in item.extras.items():
                 if k in ("browser_path", "browser_label"):
                     continue   # already folded into core fields above
+                if k == USER_OVERRIDE_KEY:
+                    log.warning(
+                        "source_attempted_override_injection",
+                        extra={"source": item.source, "url": item.url},
+                    )
+                    continue
                 fm[k] = v
 
         # Preserve enrichment fields written on earlier runs.
