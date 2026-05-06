@@ -314,16 +314,28 @@ function rowActionsHtml(bm) {
   const url = bm?.url || "";
   if (!url) return "";
   const safe = escapeHtml(url);
-  // Browsers block opening file:// URLs from an http(s):// page (security
-  // sandbox), so the ↗ button can't actually launch them. Render it
-  // visually disabled instead of a dead-end click. Copy still works —
-  // pasting the path into Finder / Terminal is the usual workflow.
+  // Only http(s) links are clickable. Two distinct skip cases:
+  //   - file:// items can't be launched from an http(s) page (browser
+  //     security sandbox); the user opens them from their file manager.
+  //   - javascript:/data:/vbscript:/etc. URLs from a hostile or
+  //     compromised source would execute in the page's context as soon
+  //     as the user clicks. escapeHtml() doesn't validate schemes — it
+  //     only escapes &<>"' — so an XSS lever exists unless we gate the
+  //     scheme here. Render disabled so the URL is still copyable for
+  //     inspection but un-clickable.
+  const isClickable = /^https?:/i.test(url);
   const isLocal = /^file:/i.test(url);
-  const openIcon = isLocal
-    ? `<span class="row-action disabled" aria-disabled="true"`
-       + ` title="Local file — open it from your file manager" tabindex="-1">↗</span>`
-    : `<a class="row-action" href="${safe}" target="_blank" rel="noopener"`
+  let openIcon;
+  if (isClickable) {
+    openIcon = `<a class="row-action" href="${safe}" target="_blank" rel="noopener"`
        + ` title="Open in new tab" aria-label="Open in new tab">↗</a>`;
+  } else if (isLocal) {
+    openIcon = `<span class="row-action disabled" aria-disabled="true"`
+       + ` title="Local file — open it from your file manager" tabindex="-1">↗</span>`;
+  } else {
+    openIcon = `<span class="row-action disabled" aria-disabled="true"`
+       + ` title="Unsupported URL scheme — not clickable" tabindex="-1">↗</span>`;
+  }
   return `<span class="row-actions">`
     + openIcon
     + `<button type="button" class="row-action" data-copy-url="${safe}"`

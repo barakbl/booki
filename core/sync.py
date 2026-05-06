@@ -129,6 +129,13 @@ def _fetch_page_title(url: str, timeout: int = 5) -> str:
       2. r.apparent_encoding (chardet on the bytes)
       3. the header's charset
     """
+    from .url_safety import is_fetchable_url
+
+    # SSRF guard: `/api/link` accepts any scheme that looks like a URL,
+    # so without this we'd happily issue requests at file://, gopher://,
+    # or http://internal-service from user-supplied input.
+    if not is_fetchable_url(url):
+        return ""
     import html as _html
     try:
         r = requests.get(url, timeout=timeout, allow_redirects=True, headers={
@@ -177,10 +184,19 @@ def sync_link(url: str, store: ItemStore, title: Optional[str] = None,
     Raises LinkExcluded if `exclude` matches the URL.
     """
     from plugins.base import Item
+    from .url_safety import is_safe_url
 
     url = url.strip()
     if not url:
         raise ValueError("empty URL")
+
+    # Detect scheme — supports both `scheme://...` and `scheme:...` forms.
+    # Refuse non-allowlisted schemes BEFORE prepending https://, so a
+    # `javascript:alert(1)` paste doesn't get mangled into "https://..."
+    # and silently swallowed; we want the user to see the rejection.
+    scheme_m = re.match(r"^([a-zA-Z][a-zA-Z0-9+\-.]*):", url)
+    if scheme_m and not is_safe_url(url):
+        raise ValueError(f"unsupported URL scheme: {scheme_m.group(1)}:")
     if not re.match(r"^[a-zA-Z][a-zA-Z0-9+\-.]*://", url):
         url = "https://" + url
 
@@ -675,7 +691,18 @@ class SyncEngine:
             count = 0
 
             try:
+                from .url_safety import is_safe_url
                 for item in source.fetch():
+                    if not is_safe_url(item.url):
+                        # Hostile / misbehaving source — refusing to persist
+                        # javascript:/data:/vbscript: URLs which would become
+                        # clickable XSS sinks in exports + the web UI.
+                        log.warning("source_yielded_unsafe_url", extra={
+                            "source": source.name,
+                            "scheme": item.url.split(":", 1)[0] if ":" in item.url else "",
+                        })
+                        stats.items_excluded += 1
+                        continue
                     reason = self.exclude.match(item.url)
                     if reason:
                         stats.items_excluded += 1
