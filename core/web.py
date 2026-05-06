@@ -682,10 +682,22 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             },
         }
 
+    # Cache /api/plugins for ~30 s to bound the cost of a polling client.
+    # Each call instantiates every source plugin and runs is_available()
+    # — which can do real work (read disk, contact an API). Without the
+    # cache, a malicious page (or a hot-loaded developer dashboard) hammers
+    # them at request rate. (P3-04)
+    _plugins_cache: dict[str, Any] = {"value": None, "expires": 0.0}
+    _plugins_cache_ttl = 30.0
+
     @app.get("/api/plugins")
-    def plugins_list():
+    def plugins_list(refresh: bool = False):
         """Enumerate registered plugins for the Manage-tab plugin admin."""
         from plugins.base import iter_tabs as _iter_tabs
+
+        now = time.monotonic()
+        if not refresh and _plugins_cache["value"] is not None and now < _plugins_cache["expires"]:
+            return _plugins_cache["value"]
 
         sources = []
         for name, cls in iter_registered():
@@ -722,11 +734,14 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             "module": c.module,
         } for _tid, c in _iter_tabs()]
 
-        return {
+        result = {
             "sources":   sources,
             "enrichers": enrichers,
             "tabs":      tabs,
         }
+        _plugins_cache["value"] = result
+        _plugins_cache["expires"] = now + _plugins_cache_ttl
+        return result
 
     @app.get("/api/logs")
     def list_logs():
@@ -794,10 +809,14 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         }
 
     @app.get("/api/status")
-    def status():
-        """System status — installed packages, tools, services."""
+    def status(detail: bool = False):
+        """System status — installed packages, tools, services.
+
+        `?detail=true` runs the `--version` probe per binary (P3-05).
+        Default off so a casual hit doesn't fork shell commands.
+        """
         from . import system_status
-        return system_status.collect(cfg)
+        return system_status.collect(cfg, deep=detail)
 
     @app.get("/api/schema")
     def schema():
