@@ -43,6 +43,7 @@ FM_ORDER = [
     "status", "archive_url",
     "removed_from_browser", "removed_from_source",
     "last_enriched", "enrich_source", "page_title", "summary", "keywords",
+    "user",
 ]
 
 # Fields the user may edit by hand — never overwritten by a re-fetch.
@@ -82,6 +83,10 @@ def _yaml_str(val) -> str:
         if not val:
             return "[]"
         return "[" + ", ".join(json.dumps(str(v)) for v in val) + "]"
+    if isinstance(val, dict):
+        if not val:
+            return "{}"
+        return json.dumps(val, ensure_ascii=False)
     s = "" if val is None else str(val)
     if not s:
         return '""'
@@ -111,6 +116,14 @@ def _parse_yaml_block(block: str) -> dict:
                 )
             continue
 
+        if raw.startswith("{") and raw.endswith("}"):
+            try:
+                val = json.loads(raw)
+                result[key] = val if isinstance(val, dict) else {}
+            except json.JSONDecodeError:
+                result[key] = {}
+            continue
+
         if raw.lower() == "true":
             result[key] = True;  continue
         if raw.lower() == "false":
@@ -134,6 +147,31 @@ def _parse_yaml_block(block: str) -> dict:
 
 def today_str() -> str:
     return datetime.now(tz=timezone.utc).date().isoformat()
+
+
+# ─── User-override view ───────────────────────────────────────────────────────
+
+def view_fm(fm: dict) -> dict:
+    """
+    Return a flat view of `fm` with the nested `user:` block overlaid on top.
+
+    On disk, frontmatter has two layers:
+      - top-level keys written by sources & enrichers (authoritative source data)
+      - `user: { … }` block — a user's hand-edits that should shadow the
+        authoritative values everywhere we display, search, or export.
+
+    Readers go through this so a user's edited title, summary, tags, etc.
+    win over whatever the source / enricher last wrote, while the original
+    values are preserved underneath as a fallback. The `user` key itself
+    is dropped from the view — it's an internal detail.
+    """
+    overrides = fm.get("user")
+    if not isinstance(overrides, dict) or not overrides:
+        return {k: v for k, v in fm.items() if k != "user"}
+    out = {k: v for k, v in fm.items() if k != "user"}
+    for k, v in overrides.items():
+        out[k] = v
+    return out
 
 
 # ─── Store ────────────────────────────────────────────────────────────────────
@@ -351,6 +389,30 @@ class ItemStore:
             return True
         return False
 
+    def update_user_fields(self, file_path: Path, **updates) -> bool:
+        """
+        Merge `updates` into the file's nested `user:` override block.
+
+        This is how UI / manual edits land on disk: the user's value goes
+        into `user.<key>` and shadows the authoritative top-level value at
+        read time (see `view_fm`). The top-level value is left intact so
+        clearing the override (deleting the key from `user`) reveals the
+        original source / enricher value again.
+        """
+        fm = self.read_frontmatter(file_path)
+        if not fm:
+            return False
+        existing_user = fm.get("user")
+        user_block = dict(existing_user) if isinstance(existing_user, dict) else {}
+        for k, v in updates.items():
+            user_block[k] = v
+        fm["user"] = user_block
+        new_content = self._render(fm)
+        if new_content != file_path.read_text(encoding="utf-8"):
+            file_path.write_text(new_content, encoding="utf-8")
+            return True
+        return False
+
     # ── internal ────────────────────────────────────────────────────────────
 
     def _build_fm(self, item: Item, today: str, existing: dict,
@@ -468,23 +530,27 @@ class ItemStore:
         lines.append("---")
         lines.append("")
 
-        title = _escape_md(str(fm.get("title", "")))
+        # Body rendering reflects the view (user-overridden values shadow
+        # source / enricher values) so the human-readable section of the
+        # file matches what the UI / search / export show.
+        view = view_fm(fm)
+        title = _escape_md(str(view.get("title", "")))
         lines.append(f"# {title}")
         lines.append("")
-        lines.append(f"**URL:** {fm.get('url','')}  ")
-        lines.append(f"**Path:** {fm.get('browser_path','')}  ")
-        lines.append(f"**Importance:** ★{fm.get('importance', 0)}")
+        lines.append(f"**URL:** {view.get('url','')}  ")
+        lines.append(f"**Path:** {view.get('browser_path','')}  ")
+        lines.append(f"**Importance:** ★{view.get('importance', 0)}")
 
-        if fm.get("removed_from_browser") or fm.get("removed_from_source"):
+        if view.get("removed_from_browser") or view.get("removed_from_source"):
             lines.append("")
             lines.append("> ⚠️ No longer present at source (kept for your records)")
         lines.append("")
 
-        if notes := str(fm.get("notes", "")).strip():
+        if notes := str(view.get("notes", "")).strip():
             lines.extend(["## Notes", "", notes, ""])
-        if summary := str(fm.get("summary", "")).strip():
+        if summary := str(view.get("summary", "")).strip():
             lines.extend(["## Summary", "", summary, ""])
-        if keywords := fm.get("keywords") or []:
+        if keywords := view.get("keywords") or []:
             lines.extend(["## Keywords", "", ", ".join(str(k) for k in keywords), ""])
 
         return "\n".join(lines).rstrip() + "\n"

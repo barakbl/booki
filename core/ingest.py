@@ -99,6 +99,14 @@ def _parse_yaml_block(block: str) -> dict:
                 )
             continue
 
+        if raw.startswith("{") and raw.endswith("}"):
+            try:
+                val = json.loads(raw)
+                result[key] = val if isinstance(val, dict) else {}
+            except json.JSONDecodeError:
+                result[key] = {}
+            continue
+
         if raw.lower() == "true":
             result[key] = True; continue
         if raw.lower() == "false":
@@ -123,7 +131,13 @@ def _parse_yaml_block(block: str) -> dict:
 # ─── Bookmark file → document ─────────────────────────────────────────────────
 
 def parse_bookmark_file(path: Path) -> dict | None:
-    """Return frontmatter dict, or None if the file lacks a frontmatter block."""
+    """Return frontmatter dict, or None if the file lacks a frontmatter block.
+
+    The returned dict is the *view* — any `user:` override block is overlaid
+    on top of the authoritative top-level fields. All readers (search, ingest,
+    export, CLI display) use this so user edits shadow source / enricher
+    values uniformly.
+    """
     try:
         content = path.read_text(encoding="utf-8")
     except Exception:
@@ -131,7 +145,8 @@ def parse_bookmark_file(path: Path) -> dict | None:
     m = FRONTMATTER_RE.match(content)
     if not m:
         return None
-    return _parse_yaml_block(m.group(1))
+    from .store import view_fm
+    return view_fm(_parse_yaml_block(m.group(1)))
 
 
 def build_document(fm: dict) -> str:

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from core.ingest import parse_bookmark_file
-from core.store import ItemStore, today_str
+from core.store import ItemStore, today_str, view_fm
 from plugins.base import Item
 
 
@@ -131,3 +131,53 @@ def test_mark_removed_is_idempotent(store: ItemStore) -> None:
     store.mark_removed(path, today_str())
 
     assert store.mark_removed(path, today_str()) is False
+
+
+# ─── user-override block ─────────────────────────────────────────────────
+
+def test_view_fm_overlays_user_block_onto_top_level() -> None:
+    """`view_fm` is the resolver every reader goes through — the nested
+    `user:` block has to win over top-level fields, and the `user` key
+    itself must be hidden so it doesn't leak into UI extras / search."""
+    fm = {"title": "Source Title", "summary": "auto",
+          "user": {"title": "My Title", "tags": ["x"]}}
+    view = view_fm(fm)
+    assert view["title"] == "My Title"
+    assert view["tags"] == ["x"]
+    assert view["summary"] == "auto"        # not overridden — fallback wins
+    assert "user" not in view
+
+
+def test_update_user_fields_writes_into_user_block(store: ItemStore) -> None:
+    """UI / manual edits land in `user:` so source-authored fields stay
+    intact underneath; reads come back through the view-overlay."""
+    path = store.write(_make_item(title="Source Title"), today_str()).path
+
+    changed = store.update_user_fields(path, title="My Title", notes="hi")
+
+    assert changed is True
+    raw = store.read_frontmatter(path)
+    assert raw["title"] == "Source Title"          # original preserved
+    assert raw["user"] == {"title": "My Title", "notes": "hi"}
+    # parse_bookmark_file returns the view — that's what readers see.
+    view = parse_bookmark_file(path)
+    assert view["title"] == "My Title"
+    assert view["notes"] == "hi"
+
+
+def test_user_block_survives_resync(store: ItemStore) -> None:
+    """Re-fetching the same URL from the source must not clobber the
+    user's overrides — the override block has to be preserved verbatim
+    just like enrichment fields are."""
+    path = store.write(_make_item(title="Original"), today_str()).path
+    store.update_user_fields(path, title="My Title", notes="my notes")
+
+    # Source re-syncs the same item — extras refreshed, overrides untouched.
+    store.write(_make_item(title="Original",
+                           extras={"github_stars": 7}), today_str())
+
+    raw = store.read_frontmatter(path)
+    assert raw["title"] == "Original"
+    assert raw["github_stars"] == 7
+    assert raw["user"]["title"] == "My Title"
+    assert raw["user"]["notes"] == "my notes"

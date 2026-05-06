@@ -194,9 +194,13 @@ class BookmarkService:
         if not updates:
             return self.get(bid)
 
-        # ItemStore.update_fields re-renders both frontmatter and body,
-        # so the on-disk MD stays in sync with the YAML truth.
-        self.store.update_fields(path, **updates, last_sync=today_str())
+        # Manual edits land in the nested `user:` override block — the
+        # authoritative top-level field (set by sources / enrichers) stays
+        # intact underneath, and `view_fm` overlays the user value at read
+        # time. `last_sync` is tracking source freshness, not user edits,
+        # so it stays at the top level.
+        self.store.update_user_fields(path, **updates)
+        self.store.update_fields(path, last_sync=today_str())
         self.refresh()
         return self.get(bid)
 
@@ -723,7 +727,8 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
                 candidate = new if l == old else l
                 if candidate not in merged:
                     merged.append(candidate)
-            svc.store.update_fields(path, lists=merged, last_sync=today_str())
+            svc.store.update_user_fields(path, lists=merged)
+            svc.store.update_fields(path, last_sync=today_str())
             changed += 1
         svc.refresh()
         return {"renamed": changed}
@@ -739,8 +744,8 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             lists = [str(l) for l in (fm.get("lists") or [])]
             if name not in lists:
                 continue
-            svc.store.update_fields(path, lists=[l for l in lists if l != name],
-                                    last_sync=today_str())
+            svc.store.update_user_fields(path, lists=[l for l in lists if l != name])
+            svc.store.update_fields(path, last_sync=today_str())
             changed += 1
         svc.refresh()
         return {"removed_from": changed}

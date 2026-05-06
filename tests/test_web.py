@@ -111,11 +111,15 @@ def test_put_bookmark_updates_frontmatter_on_disk(client, bookmarks_dir: Path) -
     assert body["importance"] == 9
     assert body["notes"] == "edited via API"
 
-    # Disk reflects the change — and was actually rewritten.
+    # Disk reflects the change — and was actually rewritten. UI edits land
+    # in the nested `user:` override block, not at the top level, so the
+    # source-authored fields stay intact and `view_fm` shadows them.
     after = file_path.read_text()
     assert after != before
-    assert "importance: 9" in after
-    assert "edited via API" in after
+    assert "user: " in after
+    assert '"importance": 9' in after
+    assert '"notes": "edited via API"' in after
+    assert "edited via API" in after   # body section also re-rendered via view
 
 
 def test_put_bookmark_unknown_id_is_404(client) -> None:
