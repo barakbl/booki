@@ -119,6 +119,62 @@ MANUAL_PATH = ["manual"]
 
 # ─── Manual link sync ─────────────────────────────────────────────────────────
 
+_MAX_TITLE_FETCH_BYTES = 2 * 1024 * 1024   # 2 MB — titles live in <head>
+_MAX_FETCH_REDIRECTS = 5
+
+
+def _safe_get(url: str, *, timeout: int, headers: dict,
+              max_bytes: int) -> Optional[requests.Response]:
+    """Outbound GET with a re-validated SSRF gate at every redirect hop.
+
+    Returns the final Response (with `.content` capped at `max_bytes`)
+    or None on any guard failure. We intentionally do NOT use
+    `allow_redirects=True`: the underlying urllib3 retry happens via DNS
+    a second time and re-resolution can land on a blocked IP without us
+    noticing. Manual redirects let us re-run `is_externally_fetchable_url`
+    on every hop (DNS-rebinding-style attacks become impossible).
+    """
+    from .url_safety import is_externally_fetchable_url
+
+    current = url
+    for _ in range(_MAX_FETCH_REDIRECTS + 1):
+        if not is_externally_fetchable_url(current):
+            return None
+        try:
+            r = requests.get(current, timeout=timeout, allow_redirects=False,
+                             stream=True, headers=headers)
+        except requests.RequestException:
+            return None
+        if r.is_redirect or r.is_permanent_redirect:
+            loc = r.headers.get("Location") or ""
+            r.close()
+            if not loc:
+                return None
+            # Resolve relative redirects against the previous URL.
+            from urllib.parse import urljoin
+            current = urljoin(current, loc)
+            continue
+        # Terminal response — read up to `max_bytes` then drop the rest.
+        try:
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in r.iter_content(chunk_size=8192):
+                if not chunk:
+                    continue
+                chunks.append(chunk)
+                total += len(chunk)
+                if total >= max_bytes:
+                    break
+            r._content = b"".join(chunks)[:max_bytes]
+        except requests.RequestException:
+            r.close()
+            return None
+        finally:
+            r.close()
+        return r
+    return None
+
+
 def _fetch_page_title(url: str, timeout: int = 5) -> str:
     """Best-effort <title> scrape. Returns "" on any failure.
 
@@ -129,22 +185,20 @@ def _fetch_page_title(url: str, timeout: int = 5) -> str:
       2. r.apparent_encoding (chardet on the bytes)
       3. the header's charset
     """
-    from .url_safety import is_fetchable_url
-
-    # SSRF guard: `/api/link` accepts any scheme that looks like a URL,
-    # so without this we'd happily issue requests at file://, gopher://,
-    # or http://internal-service from user-supplied input.
-    if not is_fetchable_url(url):
-        return ""
     import html as _html
-    try:
-        r = requests.get(url, timeout=timeout, allow_redirects=True, headers={
-            "User-Agent": "Mozilla/5.0 (booki link sync)"
-        })
-        r.raise_for_status()
 
+    r = _safe_get(
+        url,
+        timeout=timeout,
+        headers={"User-Agent": "Mozilla/5.0 (booki link sync)"},
+        max_bytes=_MAX_TITLE_FETCH_BYTES,
+    )
+    if r is None or not r.ok:
+        return ""
+    try:
         meta = re.search(rb'<meta[^>]+charset=["\']?([\w-]+)', r.content, re.IGNORECASE)
         picked = None
+        text = ""
         if meta:
             try:
                 picked = meta.group(1).decode("ascii")
@@ -257,22 +311,50 @@ class DeadLinkChecker:
         self.session.max_redirects = 10
 
     def check(self, url: str) -> str:
+        # SSRF guard: refuse to probe loopback / RFC1918 / link-local /
+        # IMDS targets. A hostile source plugin or imported bookmark
+        # file would otherwise turn `--check-dead-links` into a LAN
+        # port-scanner with results visible in stats and logs.
+        from .url_safety import is_externally_fetchable_url
+        if not is_externally_fetchable_url(url):
+            return "dead"
         try:
-            r = self.session.head(url, timeout=self.timeout, allow_redirects=True)
+            r = self.session.head(url, timeout=self.timeout, allow_redirects=False)
+            if r.is_redirect or r.is_permanent_redirect:
+                # Recurse on the redirect target so each hop is re-gated.
+                loc = r.headers.get("Location") or ""
+                if not loc:
+                    return "dead"
+                from urllib.parse import urljoin
+                return self.check(urljoin(url, loc))
             if r.status_code < 400:
                 return "alive"
-            r = self.session.get(url, timeout=self.timeout, allow_redirects=True, stream=True)
+            r = self.session.get(url, timeout=self.timeout, allow_redirects=False, stream=True)
             r.close()
+            if r.is_redirect or r.is_permanent_redirect:
+                loc = r.headers.get("Location") or ""
+                if not loc:
+                    return "dead"
+                from urllib.parse import urljoin
+                return self.check(urljoin(url, loc))
             return "alive" if r.status_code < 400 else "dead"
         except Exception:
             return "dead"
 
     def wayback_url(self, url: str) -> Optional[str]:
+        from .url_safety import is_safe_url
         try:
             r = self.session.get(WAYBACK_API, params={"url": url}, timeout=self.timeout)
             closest = r.json().get("archived_snapshots", {}).get("closest", {})
             if closest.get("available"):
-                return closest["url"]
+                # Wayback's response is JSON we don't fully control. Validate
+                # the returned URL against the same allowlist we use at write
+                # time so a hijacked / spoofed response can't plant a
+                # `javascript:` archive_url that becomes a click-to-XSS sink
+                # in the drawer.
+                cand = closest.get("url")
+                if isinstance(cand, str) and is_safe_url(cand):
+                    return cand
         except Exception:
             pass
         return None

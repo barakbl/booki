@@ -204,9 +204,12 @@ def test_hostile_source_cannot_plant_fake_end_marker(engine) -> None:
     assert body.count(BOOKI_END_MARKER) == 1
     assert body.count(BOOKI_START_MARKER) == 1
     # The injected token is still visible to the user as plain text
-    # (rendered `&lt;!--` becomes `<!--` in any markdown viewer), so the
-    # attack is observable rather than silently absorbed.
-    assert "&lt;!-- booki:end -->" in body
+    # (rendered `&lt;!--` / `--&gt;` decode back to `<!--` / `-->` in any
+    # markdown viewer), so the attack is observable rather than silently
+    # absorbed. Both ends of the comment delimiter are escaped — opener
+    # protects Booki's own marker regex; closer is defence-in-depth for
+    # downstream HTML viewers that might lock onto a stray `-->`.
+    assert "&lt;!-- booki:end --&gt;" in body
 
     # And — the actual reason this matters — re-syncs stay clean. With
     # the unsanitized version, end-marker count grew on each re-sync

@@ -55,6 +55,67 @@ def test_is_fetchable_url_is_stricter_than_is_safe(url, ok):
     assert is_fetchable_url(url) is ok
 
 
+# ─── SSRF gate: blocks loopback / private / IMDS / link-local ─────────────
+
+from core.url_safety import is_externally_fetchable_url
+
+
+@pytest.mark.parametrize("url", [
+    # Public addresses pass.
+    "https://example.com",
+    "https://1.1.1.1",
+    "https://[2606:4700:4700::1111]",
+])
+def test_externally_fetchable_allows_public(url, monkeypatch):
+    # `example.com` needs DNS; stub it to a public IP so the test isn't
+    # network-dependent. The other two URLs use literal IPs and skip DNS.
+    import socket as _s
+    real = _s.getaddrinfo
+    def fake(host, *a, **kw):
+        if host == "example.com":
+            return [(2, 1, 6, "", ("93.184.216.34", 0))]
+        return real(host, *a, **kw)
+    monkeypatch.setattr(_s, "getaddrinfo", fake)
+    assert is_externally_fetchable_url(url) is True
+
+
+@pytest.mark.parametrize("url", [
+    "http://127.0.0.1/",
+    "http://[::1]/",
+    "http://localhost/",                 # resolves to loopback
+    "http://10.0.0.1/admin",             # RFC1918
+    "http://172.16.0.1/",                # RFC1918
+    "http://192.168.1.1/",               # RFC1918
+    "http://169.254.169.254/latest/",    # AWS / GCP IMDS
+    "http://[fe80::1]/",                 # IPv6 link-local
+    "http://[fc00::1]/",                 # IPv6 ULA / private
+    "http://0.0.0.0/",                   # unspecified
+    "javascript:alert(1)",               # not fetchable scheme
+    "file:///etc/passwd",                # not fetchable scheme
+])
+def test_externally_fetchable_blocks_internal(url):
+    assert is_externally_fetchable_url(url) is False
+
+
+def test_externally_fetchable_blocks_dns_rebinding(monkeypatch):
+    """A hostname whose A record contains both a public AND a loopback IP
+    must be refused — otherwise an attacker controlling DNS can let the
+    first probe succeed and the retry land on 127.0.0.1."""
+    import socket as _s
+    monkeypatch.setattr(_s, "getaddrinfo", lambda *a, **kw: [
+        (2, 1, 6, "", ("93.184.216.34", 0)),
+        (2, 1, 6, "", ("127.0.0.1", 0)),
+    ])
+    assert is_externally_fetchable_url("http://evil.example/") is False
+
+
+def test_externally_fetchable_fails_closed_on_dns_error(monkeypatch):
+    import socket as _s
+    def boom(*a, **kw): raise _s.gaierror("nodename nor servname provided")
+    monkeypatch.setattr(_s, "getaddrinfo", boom)
+    assert is_externally_fetchable_url("http://does-not-resolve.invalid/") is False
+
+
 # ─── sync_link refuses dangerous schemes ────────────────────────────────
 
 def test_sync_link_refuses_javascript_url(tmp_path: Path):

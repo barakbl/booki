@@ -13,6 +13,7 @@ from datetime import datetime
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from core.exporter import Exporter, register_exporter
+from core.url_safety import is_safe_url
 
 KIND_GLYPHS = {
     "bookmark": "🔖",
@@ -29,6 +30,18 @@ KIND_GLYPHS = {
 
 def _glyph(kind: str) -> str:
     return KIND_GLYPHS.get(kind or "", "·")
+
+
+def _safe_href(url) -> str:
+    """Jinja filter: pass through http(s)/file URLs, otherwise return "#".
+
+    Themes use `{{ it.url|safe_href }}` (or rely on autoescape + this
+    filter) so a legacy `javascript:` URL in frontmatter — pre-dating the
+    write-time scheme allowlist — can't become a click-to-XSS sink in
+    the exported HTML page.
+    """
+    s = "" if url is None else str(url)
+    return s if is_safe_url(s) else "#"
 
 
 @register_exporter
@@ -74,6 +87,7 @@ class LinkPageExporter(Exporter):
             autoescape=select_autoescape(["html", "j2"]),
         )
         env.filters["glyph"] = _glyph
+        env.filters["safe_href"] = _safe_href
         tmpl = env.get_template("main.html.j2")
         html = tmpl.render(
             title=page_title,

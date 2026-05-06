@@ -33,7 +33,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Reuse parsers / writers from the CLI tools.
 from .ingest import FRONTMATTER_RE, bm_id, parse_bookmark_file
@@ -84,14 +84,29 @@ class BookmarkDetail(Bookmark):
 
 
 class BookmarkUpdate(BaseModel):
-    """Only these fields may be edited from the UI."""
-    title: Optional[str] = None
-    importance: Optional[int] = Field(default=None, ge=0, le=10)
-    tags: Optional[list[str]] = None
-    lists: Optional[list[str]] = None
-    notes: Optional[str] = None
-    summary: Optional[str] = None
-    keywords: Optional[list[str]] = None
+    """Only these fields may be edited from the UI.
+
+    Caps are intentionally loose enough that no real user edit hits them
+    but tight enough that a single PUT can't bloat the on-disk MD or the
+    in-memory index (`svc.refresh()` re-reads every file). A 10 MB notes
+    field would otherwise wedge every subsequent list call.
+    """
+    title:      Optional[str]       = Field(default=None, max_length=500)
+    importance: Optional[int]       = Field(default=None, ge=0, le=10)
+    tags:       Optional[list[str]] = Field(default=None, max_length=64)
+    lists:      Optional[list[str]] = Field(default=None, max_length=64)
+    notes:      Optional[str]       = Field(default=None, max_length=20_000)
+    summary:    Optional[str]       = Field(default=None, max_length=5_000)
+    keywords:   Optional[list[str]] = Field(default=None, max_length=64)
+
+    @field_validator("tags", "lists", "keywords")
+    @classmethod
+    def _cap_string_items(cls, v):
+        # Cap each entry at 200 chars — `max_length` on the list only
+        # bounds the count, not individual element length.
+        if v is None:
+            return v
+        return [str(x)[:200] for x in v]
 
 
 class ListRename(BaseModel):
@@ -551,7 +566,15 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
     @app.get("/api/logs/{name}")
     def get_log(name: str, tail: int = 500):
         """Return the last `tail` lines (≤5000) of one Booki log file."""
-        if "/" in name or "\\" in name or ".." in name.split("."):
+        # Path-traversal guard: refuse anything containing a separator,
+        # a NUL, or a `..` segment. The realpath/within check below is
+        # the load-bearing defence; this is just early input rejection.
+        if (
+            "/" in name
+            or "\\" in name
+            or "\x00" in name
+            or ".." in name
+        ):
             raise HTTPException(400, "invalid log name")
         log_path = _resolved_log_path(cfg)
         if log_path is None:

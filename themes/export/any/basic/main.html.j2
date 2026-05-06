@@ -169,7 +169,7 @@ input.filter:focus { border-color: var(--accent); }
         <li class="item" data-search="{{ ((it.title or '') ~ ' ' ~ (it.url or '') ~ ' ' ~ ((it.tags or [])|join(' ')) ~ ' ' ~ (it.summary or ''))|lower }}">
           <div class="item-head">
             <span class="item-glyph">{{ it.kind|glyph }}</span>
-            <a class="item-title" href="{{ it.url }}" target="_blank" rel="noopener"><bdi>{{ it.title or '(untitled)' }}</bdi></a>
+            <a class="item-title" href="{{ it.url|safe_href }}" target="_blank" rel="noopener"><bdi>{{ it.title or '(untitled)' }}</bdi></a>
             {% if it.importance %}<span class="item-imp"><bdi>★{{ it.importance }}</bdi></span>{% endif %}
             {% if it.source %}<span class="item-source"><bdi>{{ it.source }}</bdi></span>{% endif %}
           </div>

@@ -43,6 +43,13 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from core.exporter import Exporter, TaskHandle, register_exporter
 from core.local_files import safe_local_path
+from core.url_safety import is_safe_url
+
+
+def _safe_href(url) -> str:
+    """Same scheme guard as the link exporter — see its module docstring."""
+    s = "" if url is None else str(url)
+    return s if is_safe_url(s) else "#"
 
 log = logging.getLogger("booki.exporter.archive")
 
@@ -259,6 +266,7 @@ class OfflineArchiveExporter(Exporter):
             loader=FileSystemLoader(str(theme.path)),
             autoescape=select_autoescape(["html", "j2"]),
         )
+        env.filters["safe_href"] = _safe_href
         tmpl = env.get_template("archive.html.j2")
         html = tmpl.render(
             title=page_title,
@@ -393,6 +401,7 @@ class OfflineArchiveExporter(Exporter):
             loader=FileSystemLoader(str(theme.path)),
             autoescape=select_autoescape(["html", "j2"]),
         )
+        env.filters["safe_href"] = _safe_href
         tmpl = env.get_template("archive.html.j2")
         html = tmpl.render(
             title=page_title,

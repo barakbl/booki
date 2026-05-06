@@ -90,12 +90,14 @@ def _neutralize_html_comments(s: str) -> str:
     A hostile source could otherwise plant `<!-- booki:end -->` inside a
     title / summary / notes string; the next sync's marker regex would
     pick that up as the end of the managed block and let post-marker
-    content leak across re-syncs. We replace the literal comment opener
-    with `&lt;!--` — viewers render `&lt;` as `<` so the user still sees
-    the attempted injection in plain text, but Booki's regex never
-    matches a real HTML comment in the body.
+    content leak across re-syncs. We escape both the opener and the
+    closer — viewers render `&lt;` as `<` so the user still sees the
+    attempted injection in plain text, but Booki's regex never matches
+    a real HTML comment in the body, and downstream HTML viewers (e.g.
+    a markdown→HTML renderer pointed at the file) won't be tricked into
+    treating the surrounding content as a comment payload.
     """
-    return s.replace("<!--", "&lt;!--")
+    return s.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
 
 # Fields the user may edit by hand — never overwritten by a re-fetch.
 USER_EDITABLE = {"importance", "tags", "lists", "notes"}
@@ -141,7 +143,20 @@ def _yaml_str(val) -> str:
     s = "" if val is None else str(val)
     if not s:
         return '""'
-    needs_quote = any(c in s for c in ':#{}[]&*!|>\'",%@`\\') or s != s.strip()
+    # Quote on:
+    #   - YAML/structural punctuation that would change parse meaning
+    #   - leading/trailing whitespace (would be stripped on read)
+    #   - any control byte (newline, tab, NUL, …). Our home-grown parser
+    #     reads line-by-line, so an internal '\n' in an unquoted value
+    #     would smuggle the rest of the value into orphan lines and
+    #     potentially be reinterpreted as a key on the next read. Forcing
+    #     a JSON-string round-trip neutralises every such case.
+    has_ctrl = any(ord(c) < 0x20 or ord(c) == 0x7f for c in s)
+    needs_quote = (
+        any(c in s for c in ':#{}[]&*!|>\'",%@`\\')
+        or s != s.strip()
+        or has_ctrl
+    )
     return json.dumps(s) if needs_quote else s
 
 
@@ -476,6 +491,12 @@ class ItemStore:
         Surgical: only the frontmatter YAML is rewritten — the markdown
         body below `---` is left byte-for-byte unchanged. UI metadata
         edits never touch the human-readable content.
+
+        Keys outside `USER_EDITABLE` ∪ {`title`, `summary`, `keywords`}
+        are silently dropped: any future endpoint that forwards user
+        input here would otherwise let the override block shadow `url`,
+        `source`, `archive_url`, etc. via `view_fm` — turning an edit
+        endpoint into an authority-rewrite primitive.
         """
         if not file_path.exists():
             return False
@@ -488,7 +509,12 @@ class ItemStore:
         fm = _parse_yaml_block(m.group(1))
         existing_user = fm.get(USER_OVERRIDE_KEY)
         user_block = dict(existing_user) if isinstance(existing_user, dict) else {}
+        allowed = USER_EDITABLE | {"title", "summary", "keywords"}
         for k, v in updates.items():
+            if k not in allowed:
+                log.warning("update_user_fields_rejected_key",
+                            extra={"file": str(file_path), "key": k})
+                continue
             user_block[k] = v
         fm[USER_OVERRIDE_KEY] = user_block
 

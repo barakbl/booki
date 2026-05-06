@@ -162,7 +162,7 @@ input.filter:focus { border-color: var(--accent); }
         </div>
         <div class="links">
           <a class="local-link" href="./files/{{ it.filename }}" target="_blank" rel="noopener">📂 offline copy</a>
-          {% if it.url %}<a class="ext-link" href="{{ it.url }}" target="_blank" rel="noopener noreferrer">🌐 open original ↗</a>{% endif %}
+          {% if it.url %}<a class="ext-link" href="{{ it.url|safe_href }}" target="_blank" rel="noopener noreferrer">🌐 open original ↗</a>{% endif %}
         </div>
         {% if it.summary %}<div class="summary">{{ it.summary }}</div>{% endif %}
         {% if it.extra_files %}

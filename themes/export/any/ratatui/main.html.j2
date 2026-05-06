@@ -228,7 +228,7 @@ html, body {
             <li class="tui-row" data-search="{{ ((it.title or '') ~ ' ' ~ (it.url or '') ~ ' ' ~ ((it.tags or [])|join(' ')) ~ ' ' ~ (it.summary or ''))|lower }}">
               <span class="tui-row-num">{{ '%03d' | format(ns.idx) }}</span>
               <span class="tui-row-glyph">{{ it.kind|glyph }}</span>
-              <a class="tui-row-title" href="{{ it.url }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
+              <a class="tui-row-title" href="{{ it.url|safe_href }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
               {% if it.importance %}<span class="tui-row-imp">★{{ it.importance }}</span>{% else %}<span></span>{% endif %}
               {% if it.tags %}<span class="tui-row-tags">[{{ it.tags|join(' ') }}]</span>{% else %}<span></span>{% endif %}
               <span class="tui-row-url"><bdi>{{ it.url }}</bdi></span>

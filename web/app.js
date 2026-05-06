@@ -164,6 +164,23 @@ function escapeHtml(s) {
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
 }
+// Mirror of core.url_safety.SAFE_URL_SCHEMES on the wire side. `escapeHtml`
+// only neutralises attribute breakouts — it does NOT block `javascript:` /
+// `data:` / `vbscript:` schemes from becoming click-to-XSS sinks once
+// rendered as `<a href>`. Every place that builds an href from
+// frontmatter-controlled data must run it through this guard first; URLs
+// for which the guard returns "" should be rendered as inert text.
+const SAFE_HREF_SCHEMES = new Set(["http", "https", "file"]);
+function safeHref(url) {
+  const s = String(url ?? "").trim();
+  if (!s) return "";
+  // Same prefix-only check as the server: don't trust URL() to classify
+  // because it accepts e.g. `javascript://example.com/...`.
+  const idx = s.indexOf(":");
+  if (idx <= 0) return s;          // relative URL — no scheme, no XSS risk
+  const scheme = s.slice(0, idx).toLowerCase();
+  return SAFE_HREF_SCHEMES.has(scheme) ? s : "";
+}
 function showToast(msg, ms = 1800) {
   els.toast.textContent = msg;
   els.toast.classList.remove("hidden");
@@ -1511,8 +1528,14 @@ async function openDetail(id) {
 
   els.detailTitle.textContent = d.title || d.url;
   els.detailUrl.textContent = d.url;
-  els.detailUrl.href = d.url;
-  els.detailOpen.href = d.url;
+  // Legacy items pre-dating the url_safety allowlist may still have
+  // javascript:/data: URLs persisted on disk — those would execute in
+  // this origin if assigned directly to `.href`. Render them as inert.
+  const safeUrl = safeHref(d.url);
+  els.detailUrl.href = safeUrl || "#";
+  els.detailUrl.classList.toggle("disabled", !safeUrl);
+  els.detailOpen.href = safeUrl || "#";
+  els.detailOpen.classList.toggle("disabled", !safeUrl);
 
   els.detailImp.textContent = `★${d.importance}`;
   els.detailImp.className = "chip imp";
@@ -1534,8 +1557,14 @@ async function openDetail(id) {
   // last_enriched lives in extras (it's not part of CORE_FIELDS server-side)
   // until it gets promoted; surface it here so users can confirm an enrich run.
   els.detailLastenriched.textContent = ((d.extras || {}).last_enriched) || d.last_enriched || "—";
+  // archive_url is set by the dead-link flow from the Wayback API, but it
+  // also flows through frontmatter — a hostile source plugin or a hand
+  // edit can plant a `javascript:` URL. Gate on scheme before rendering.
+  const safeArchive = safeHref(d.archive_url);
   els.detailArchive.innerHTML      = d.archive_url
-    ? `<a href="${escapeHtml(d.archive_url)}" target="_blank" rel="noopener">${escapeHtml(d.archive_url)}</a>`
+    ? (safeArchive
+        ? `<a href="${escapeHtml(safeArchive)}" target="_blank" rel="noopener">${escapeHtml(d.archive_url)}</a>`
+        : `<span class="hint-text" title="Unsafe URL scheme — not clickable">${escapeHtml(d.archive_url)}</span>`)
     : "—";
   els.detailFile.textContent = d.file || "—";
 
@@ -1635,9 +1664,14 @@ function formatValue(v, spec) {
         ? `${spec.icon} ${escapeHtml(String(v))}`
         : escapeHtml(String(v));
     case "url": {
-      const href = spec.url_template
+      const raw = spec.url_template
         ? spec.url_template.replace("{value}", encodeURIComponent(String(v)))
         : String(v);
+      // Plugin/enricher extras land here. A buggy or hostile plugin could
+      // ship a `javascript:` URL; escapeHtml stops attribute breakouts but
+      // not scheme abuse. Render disabled if the scheme isn't allow-listed.
+      const href = safeHref(raw);
+      if (!href) return escapeHtml(String(v));
       return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(String(v))}</a>`;
     }
     case "image": {
@@ -1645,19 +1679,24 @@ function formatValue(v, spec) {
       // <img> wrapped in an anchor so click opens the full-resolution image
       // in a new tab. `loading=lazy` so off-screen drawer items don't fetch
       // until the user opens them.
-      const src = String(v);
+      const src = safeHref(String(v));
       const alt = escapeHtml(spec.label || "image");
+      if (!src) return escapeHtml(String(v));
       return `<a href="${escapeHtml(src)}" target="_blank" rel="noopener" class="extra-thumb-link">`
            + `<img class="extra-thumb" src="${escapeHtml(src)}" alt="${alt}" loading="lazy">`
            + `</a>`;
     }
     case "file_link": {
       // Server-relative path stored in FM. `url_prefix` mounts it under a
-      // StaticFiles route so the link works from the browser.
-      const prefix = spec.url_prefix || "/";
+      // StaticFiles route so the link works from the browser. The prefix
+      // comes from the plugin schema — be paranoid about it anyway in case
+      // a plugin author types `javascript:` by mistake.
+      const prefix = String(spec.url_prefix || "/");
       const segments = String(v).split("/").map(encodeURIComponent);
-      const href = prefix + segments.join("/");
+      const rawHref = prefix + segments.join("/");
+      const href = rawHref.startsWith("/") ? rawHref : safeHref(rawHref);
       const label = segments[segments.length - 1] ? decodeURIComponent(segments[segments.length - 1]) : String(v);
+      if (!href) return escapeHtml(label);
       return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener">📂 ${escapeHtml(label)}</a>`;
     }
     case "tags":

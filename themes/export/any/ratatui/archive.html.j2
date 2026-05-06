@@ -127,7 +127,7 @@ html, body {
             <a class="tui-row-title" href="./files/{{ it.filename }}" target="_blank" rel="noopener">{{ it.title or '(untitled)' }}</a>
             <div class="tui-row-links">
               <a class="tui-link local" href="./files/{{ it.filename }}" target="_blank" rel="noopener">[ offline ]</a>
-              {% if it.url %}<a class="tui-link ext" href="{{ it.url }}" target="_blank" rel="noopener noreferrer">[ original ↗ ]</a>{% endif %}
+              {% if it.url %}<a class="tui-link ext" href="{{ it.url|safe_href }}" target="_blank" rel="noopener noreferrer">[ original ↗ ]</a>{% endif %}
             </div>
             <div class="tui-row-meta"><bdi>{{ it.url }}</bdi></div>
             {% if it.extra_files %}
