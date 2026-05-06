@@ -43,7 +43,13 @@ FM_ORDER = [
     "status", "archive_url",
     "removed_from_browser", "removed_from_source",
     "last_enriched", "enrich_source", "page_title", "summary", "keywords",
+    "booki_user_override",
 ]
+
+# Frontmatter key holding the user's manual-override block. Namespaced with
+# the `booki_` prefix so it can't collide with any source-supplied or
+# enricher-supplied field name and is obvious in raw YAML.
+USER_OVERRIDE_KEY = "booki_user_override"
 
 # Fields the user may edit by hand — never overwritten by a re-fetch.
 USER_EDITABLE = {"importance", "tags", "lists", "notes"}
@@ -82,6 +88,10 @@ def _yaml_str(val) -> str:
         if not val:
             return "[]"
         return "[" + ", ".join(json.dumps(str(v)) for v in val) + "]"
+    if isinstance(val, dict):
+        if not val:
+            return "{}"
+        return json.dumps(val, ensure_ascii=False)
     s = "" if val is None else str(val)
     if not s:
         return '""'
@@ -111,6 +121,14 @@ def _parse_yaml_block(block: str) -> dict:
                 )
             continue
 
+        if raw.startswith("{") and raw.endswith("}"):
+            try:
+                val = json.loads(raw)
+                result[key] = val if isinstance(val, dict) else {}
+            except json.JSONDecodeError:
+                result[key] = {}
+            continue
+
         if raw.lower() == "true":
             result[key] = True;  continue
         if raw.lower() == "false":
@@ -134,6 +152,31 @@ def _parse_yaml_block(block: str) -> dict:
 
 def today_str() -> str:
     return datetime.now(tz=timezone.utc).date().isoformat()
+
+
+# ─── User-override view ───────────────────────────────────────────────────────
+
+def view_fm(fm: dict) -> dict:
+    """
+    Return a flat view of `fm` with the nested override block overlaid.
+
+    On disk, frontmatter has two layers:
+      - top-level keys written by sources & enrichers (authoritative source data)
+      - `booki_user_override: { … }` — a user's hand-edits that should shadow
+        the authoritative values everywhere we display, search, or export.
+
+    Readers go through this so a user's edited title, summary, tags, etc.
+    win over whatever the source / enricher last wrote, while the original
+    values are preserved underneath as a fallback. The override key itself
+    is dropped from the view — it's an internal detail.
+    """
+    overrides = fm.get(USER_OVERRIDE_KEY)
+    if not isinstance(overrides, dict) or not overrides:
+        return {k: v for k, v in fm.items() if k != USER_OVERRIDE_KEY}
+    out = {k: v for k, v in fm.items() if k != USER_OVERRIDE_KEY}
+    for k, v in overrides.items():
+        out[k] = v
+    return out
 
 
 # ─── Store ────────────────────────────────────────────────────────────────────
@@ -351,6 +394,41 @@ class ItemStore:
             return True
         return False
 
+    def update_user_fields(self, file_path: Path, **updates) -> bool:
+        """
+        Merge `updates` into the file's `booki_user_override` block.
+
+        This is how UI / manual edits land on disk: the user's value goes
+        into the override block and shadows the authoritative top-level
+        value at read time (see `view_fm`). The top-level value is left
+        intact so clearing an override (popping the key) reveals the
+        original source / enricher value again.
+
+        Surgical: only the frontmatter YAML is rewritten — the markdown
+        body below `---` is left byte-for-byte unchanged. UI metadata
+        edits never touch the human-readable content.
+        """
+        if not file_path.exists():
+            return False
+        original = file_path.read_text(encoding="utf-8")
+        m = re.match(r"^---\n(.*?)\n---\n", original, re.DOTALL)
+        if not m:
+            return False
+        body = original[m.end():]
+
+        fm = _parse_yaml_block(m.group(1))
+        existing_user = fm.get(USER_OVERRIDE_KEY)
+        user_block = dict(existing_user) if isinstance(existing_user, dict) else {}
+        for k, v in updates.items():
+            user_block[k] = v
+        fm[USER_OVERRIDE_KEY] = user_block
+
+        new_content = self._render_frontmatter(fm) + body
+        if new_content != original:
+            file_path.write_text(new_content, encoding="utf-8")
+            return True
+        return False
+
     # ── internal ────────────────────────────────────────────────────────────
 
     def _build_fm(self, item: Item, today: str, existing: dict,
@@ -455,7 +533,10 @@ class ItemStore:
 
         return fm
 
-    def _render(self, fm: dict) -> str:
+    def _render_frontmatter(self, fm: dict) -> str:
+        """Render just the YAML frontmatter block including the closing
+        `---\\n`. Pair with the file's existing body to do surgical
+        frontmatter-only rewrites (see `update_user_fields`)."""
         lines = ["---"]
         seen: set[str] = set()
         for key in FM_ORDER:
@@ -466,8 +547,14 @@ class ItemStore:
         for key in sorted(k for k in fm if k not in seen):
             lines.append(f"{key}: {_yaml_str(fm[key])}")
         lines.append("---")
-        lines.append("")
+        return "\n".join(lines) + "\n"
 
+    def _render(self, fm: dict) -> str:
+        # Body reflects the raw source/enricher fields. User overrides live
+        # only in the override block — they do not rewrite the human-readable
+        # body. The view-overlay is applied at read time by every consumer.
+        lines: list[str] = []
+        lines.append("")
         title = _escape_md(str(fm.get("title", "")))
         lines.append(f"# {title}")
         lines.append("")
@@ -487,7 +574,7 @@ class ItemStore:
         if keywords := fm.get("keywords") or []:
             lines.extend(["## Keywords", "", ", ".join(str(k) for k in keywords), ""])
 
-        return "\n".join(lines).rstrip() + "\n"
+        return self._render_frontmatter(fm) + "\n".join(lines).rstrip() + "\n"
 
     def _prune_empty(self, directory: Path) -> None:
         try:

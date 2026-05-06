@@ -111,11 +111,15 @@ def test_put_bookmark_updates_frontmatter_on_disk(client, bookmarks_dir: Path) -
     assert body["importance"] == 9
     assert body["notes"] == "edited via API"
 
-    # Disk reflects the change — and was actually rewritten.
+    # Disk reflects the change — and was actually rewritten. UI edits land
+    # in the `booki_user_override` block, not at the top level, so the
+    # source-authored fields stay intact and `view_fm` shadows them at
+    # read time. The markdown body is left untouched.
     after = file_path.read_text()
     assert after != before
-    assert "importance: 9" in after
-    assert "edited via API" in after
+    assert "booki_user_override: " in after
+    assert '"importance": 9' in after
+    assert '"notes": "edited via API"' in after
 
 
 def test_put_bookmark_unknown_id_is_404(client) -> None:
