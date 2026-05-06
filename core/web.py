@@ -156,7 +156,15 @@ class AskResult(BaseModel):
 class BookmarkService:
     """
     In-memory index of all bookmark MD files, keyed by id (sha256(url)[:16]).
-    Re-reads from disk whenever `.refresh()` is called — cheap for O(100) files.
+
+    `refresh()` is the only entry point that touches disk. It uses an
+    mtime fingerprint — a sorted list of `(path, mtime)` for every `.md`
+    under the bookmarks dir — so repeated calls in a single page load
+    (search list, stats, library errors, …) only do the cheap
+    `stat`-each-file walk; the parse step is skipped when nothing has
+    changed. External edits (a hand-tweaked .md, a CLI `booki sync`)
+    bump file mtimes and are therefore picked up immediately on the
+    next refresh.
     """
 
     def __init__(self, bookmarks_dir: Path):
@@ -169,22 +177,70 @@ class BookmarkService:
         # index instead of just seeing a smaller count.
         self._errors: list[LoadError] = []
         self._scanned: int = 0
+        # Sorted list of `(path_str, mtime)` from the last full scan.
+        # `None` forces the next refresh to do a full re-parse (used after
+        # writes to bypass the no-change shortcut).
+        self._fingerprint: Optional[list[tuple[str, float]]] = None
         self.refresh()
 
-    def refresh(self) -> None:
-        self._index.clear()
-        self._errors = []
-        self._scanned = 0
+    def _fingerprint_dir(self) -> list[tuple[str, float]]:
+        """Walk the bookmarks dir and return a sorted (path, mtime) list.
+
+        One `stat` per `.md` file — no reads, no parsing. For a few
+        thousand files this is sub-millisecond on SSD."""
         if not self.dir.exists():
+            return []
+        out: list[tuple[str, float]] = []
+        for p in sorted(self.dir.rglob("*.md")):
+            try:
+                out.append((str(p), p.stat().st_mtime))
+            except OSError:
+                # Race with deletion or a permission flip — drop from the
+                # fingerprint and let the next refresh notice when stable.
+                continue
+        return out
+
+    def refresh(self, *, force: bool = False) -> None:
+        """Sync the in-memory index with disk.
+
+        Cheap when nothing has changed: walks each `.md` for an mtime
+        fingerprint and short-circuits when it matches the cached one.
+        Pass `force=True` after a write that bypasses mtime granularity
+        (e.g. two writes within the same filesystem-mtime tick).
+        """
+        if not self.dir.exists():
+            self._index = {}
+            self._errors = []
+            self._scanned = 0
+            self._fingerprint = []
             return
-        scan = scan_bookmarks(self.dir)
-        self._errors = scan.errors
-        self._scanned = scan.scanned
+
+        fp = self._fingerprint_dir()
+        if not force and self._fingerprint is not None and fp == self._fingerprint:
+            # No file changed since last full parse — reuse the index.
+            return
+
+        # Something changed (or first run / forced) — re-parse.
+        scan = scan_bookmarks(self.dir, paths=[Path(p) for p, _ in fp])
+        new_index: dict[str, tuple[Path, dict]] = {}
         for path, raw_fm in scan.items:
             fm = view_fm(raw_fm)
             if not fm.get("url"):
                 continue
-            self._index[bm_id(fm)] = (path, fm)
+            new_index[bm_id(fm)] = (path, fm)
+        self._index = new_index
+        self._errors = scan.errors
+        self._scanned = scan.scanned
+        self._fingerprint = fp
+
+    def invalidate(self) -> None:
+        """Drop the cached fingerprint so the next refresh re-parses.
+
+        Use after a same-process write whose mtime change might collide
+        with the cached fingerprint (rare, but possible when a write
+        finishes inside the same filesystem-mtime tick as the prior scan).
+        """
+        self._fingerprint = None
 
     def errors(self) -> list[LoadError]:
         return list(self._errors)
@@ -231,7 +287,9 @@ class BookmarkService:
         # so it stays at the top level.
         self.store.update_user_fields(path, **updates)
         self.store.update_fields(path, last_sync=today_str())
-        self.refresh()
+        # Same-process writes can land within one filesystem-mtime tick of
+        # the prior scan; force the next refresh to actually re-parse.
+        self.refresh(force=True)
         return self.get(bid)
 
 
@@ -804,7 +862,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             svc.store.update_user_fields(path, lists=merged)
             svc.store.update_fields(path, last_sync=today_str())
             changed += 1
-        svc.refresh()
+        svc.refresh(force=True)
         return {"renamed": changed}
 
     @app.delete("/api/lists/{name}")
@@ -821,7 +879,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             svc.store.update_user_fields(path, lists=[l for l in lists if l != name])
             svc.store.update_fields(path, last_sync=today_str())
             changed += 1
-        svc.refresh()
+        svc.refresh(force=True)
         return {"removed_from": changed}
 
     @app.post("/api/bookmarks/{bid}/download", response_model=DownloadResponse)
@@ -843,7 +901,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
                 result = download_one(detail.url, dl_cfg, audio=audio)
                 if result.ok:
                     update_md_for_download(svc.store, detail.url, result, dl_cfg)
-                    svc.refresh()
+                    svc.refresh(force=True)
                     with dl_lock:
                         dl_jobs[bid] = "done"
                 else:
@@ -890,7 +948,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             raise HTTPException(400, str(e))
         except Exception as e:
             raise HTTPException(500, f"{type(e).__name__}: {e}")
-        svc.refresh()
+        svc.refresh(force=True)
         fm = svc.store.read_frontmatter(path)
         return LinkAddResponse(id=bm_id(fm), url=str(fm.get("url", "")),
                                title=title, is_new=is_new)

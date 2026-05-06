@@ -207,6 +207,57 @@ def test_api_library_errors_empty_when_clean(client):
 
 # ─── ingest skip behavior ─────────────────────────────────────────────────
 
+def test_bookmark_service_cache_skips_reparse(bookmarks_dir, monkeypatch):
+    """Repeat refresh() calls reuse the parsed index when no file changed.
+
+    This is the win the search/stats/errors page-load triple-fetch needs:
+    only the first refresh re-parses; the rest just stat-walk and bail.
+    """
+    from core import web as web_mod
+    svc = web_mod.BookmarkService(bookmarks_dir)
+    initial_index = svc._index
+
+    # Spy on scan_bookmarks: it MUST NOT be invoked again when the
+    # fingerprint matches (i.e. nothing changed on disk).
+    calls = {"n": 0}
+    real_scan = web_mod.scan_bookmarks
+    def spy(d, **kw):
+        calls["n"] += 1
+        return real_scan(d, **kw)
+    monkeypatch.setattr(web_mod, "scan_bookmarks", spy)
+
+    svc.refresh()
+    svc.refresh()
+    svc.refresh()
+    assert calls["n"] == 0
+    assert svc._index is initial_index  # same object, not rebuilt
+
+    # Touch a file → fingerprint changes → next refresh must re-parse.
+    target = next(iter(bookmarks_dir.rglob("*.md")))
+    import os, time as _t
+    new_mtime = target.stat().st_mtime + 5
+    os.utime(target, (new_mtime, new_mtime))
+    svc.refresh()
+    assert calls["n"] == 1
+
+
+def test_bookmark_service_force_bypasses_cache(bookmarks_dir, monkeypatch):
+    """force=True parses even when the fingerprint hasn't changed — used
+    after same-process writes that may collide with the mtime tick."""
+    from core import web as web_mod
+    svc = web_mod.BookmarkService(bookmarks_dir)
+
+    calls = {"n": 0}
+    real_scan = web_mod.scan_bookmarks
+    def spy(d, **kw):
+        calls["n"] += 1
+        return real_scan(d, **kw)
+    monkeypatch.setattr(web_mod, "scan_bookmarks", spy)
+
+    svc.refresh(force=True)
+    assert calls["n"] == 1
+
+
 def test_ingest_loader_skips_broken_files(bookmarks_dir):
     """`load_all_bookmarks` returns errors and silently skips bad files."""
     from core.ingest import load_all_bookmarks
