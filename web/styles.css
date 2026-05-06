@@ -3121,32 +3121,47 @@ body.refine-dragging .tree .tree { padding-top: 2px; padding-bottom: 2px; }
 .lib-banner {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
-  margin: 0;
-  border-bottom: 1px solid var(--border);
+  gap: 14px;
+  /* Match the rest of the page chrome (.topbar / .tabs / .tab-panel)
+     instead of stretching edge-to-edge — the wall-of-text was hard to
+     scan on wide monitors. */
+  max-width: 1100px;
+  margin: 12px auto 0;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
   background: rgba(245, 158, 11, 0.08);
   color: var(--text);
   font-size: 14px;
 }
 .lib-banner[data-severity="danger"] {
-  background: rgba(239, 68, 68, 0.10);
-  border-bottom-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.45);
+  /* Subtle accent rail on the leading edge so danger jumps out without
+     repainting the whole banner. */
+  box-shadow: inset 4px 0 0 var(--danger);
+  padding-left: 20px;
 }
 .lib-banner[data-severity="warn"] {
-  background: rgba(245, 158, 11, 0.10);
-  border-bottom-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.45);
+  box-shadow: inset 4px 0 0 var(--warn);
+  padding-left: 20px;
 }
 .lib-banner.hidden,
 .lib-banner[hidden] { display: none; }
 .lib-banner-icon {
-  font-size: 18px;
+  font-size: 20px;
   line-height: 1;
+  flex-shrink: 0;
 }
-.lib-banner-text { flex: 1; line-height: 1.45; }
+.lib-banner[data-severity="danger"] .lib-banner-icon { color: var(--danger); }
+.lib-banner[data-severity="warn"]   .lib-banner-icon { color: var(--warn); }
+.lib-banner-text { flex: 1; line-height: 1.45; min-width: 0; }
 .lib-banner-text strong { font-weight: 600; }
 .lib-banner-action {
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .lib-banner-close {
   border: 0;
@@ -3156,8 +3171,17 @@ body.refine-dragging .tree .tree { padding-top: 2px; padding-bottom: 2px; }
   cursor: pointer;
   padding: 4px 8px;
   border-radius: 4px;
+  flex-shrink: 0;
 }
 .lib-banner-close:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+@media (max-width: 720px) {
+  .lib-banner {
+    margin: 8px 12px 0;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .lib-banner-text { flex-basis: 100%; }
+}
 
 /* ─── Corrupted files panel (Manage > Doctor) ─────────────────────── */
 .corrupt-panel {

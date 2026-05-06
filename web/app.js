@@ -3414,8 +3414,12 @@ function renderHealthBanner(data) {
   el.hidden = false;
   el.classList.remove("hidden");
   el.dataset.severity = severity;
+  // 🛑 reads as red on every platform's emoji font; ⚠️ stays orange for the
+  // softer schema-warning case. Both convey severity at a glance without
+  // relying on color alone (the leading rail + bg tint reinforce it).
+  const icon = severity === "danger" ? "🛑" : "⚠️";
   el.innerHTML = `
-    <span class="lib-banner-icon">${skipped > 0 ? "⚠" : "ℹ"}</span>
+    <span class="lib-banner-icon" aria-hidden="true">${icon}</span>
     <div class="lib-banner-text">
       ${lines.join(" ")}
     </div>
