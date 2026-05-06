@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Reuse YAML helpers + frontmatter regex + ISO timestamp helper from the
 # exporter task store so we don't duplicate them.
@@ -325,8 +325,15 @@ class JobRunner:
 # ─── FastAPI wiring ─────────────────────────────────────────────────────────
 
 class JobRunRequest(BaseModel):
-    kind: str
-    args: list[str] = Field(default_factory=list)
+    # Bound the request shape so the validator can't be hit with a
+    # multi-MB args list before _sanitize_args runs. (P1-06)
+    kind: str = Field(min_length=1, max_length=32)
+    args: list[str] = Field(default_factory=list, max_length=64)
+
+    @field_validator("args")
+    @classmethod
+    def _cap_arg_strings(cls, v: list[str]) -> list[str]:
+        return [str(x)[:512] for x in v]
 
 
 def attach_routes(app: FastAPI, exports_root: Path, project_root: Path) -> None:

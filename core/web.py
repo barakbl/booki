@@ -127,8 +127,10 @@ class AskQuery(BaseModel):
 
 
 class LinkAddRequest(BaseModel):
-    url: str
-    title: Optional[str] = None
+    # Bound URL + title at the request edge so a hostile / careless
+    # caller can't push a 1 MB URL through the title-fetch path. (P1-04)
+    url: str = Field(min_length=1, max_length=4096)
+    title: Optional[str] = Field(default=None, max_length=500)
 
 
 class LinkAddResponse(BaseModel):
@@ -560,8 +562,15 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         return {"ok": True, "message": "shutting down"}
 
     @app.get("/api/info")
-    def info():
-        """Static-ish runtime info (provider names, paths) for the Manage tab."""
+    def info(detail: bool = False):
+        """Static-ish runtime info for the Manage tab.
+
+        By default we strip absolute paths and remote-endpoint URLs to
+        their basenames — even on a localhost-only deployment those
+        details make lateral movement easier if the page is ever framed
+        or the response sniffed via a future browser-side hole. Set
+        `?detail=true` to opt back in to the full picture. (P1-07)
+        """
         embed = (cfg.get("embeddings", {}) or {})
         llm = (cfg.get("llm", {}) or {})
         web_cfg = (cfg.get("web", {}) or {})
@@ -570,13 +579,30 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         from .ingest import chromadb_installed, vector_db_enabled
         vec_enabled = vector_db_enabled(cfg)
         vec_installed = chromadb_installed()
+
+        def _maybe_path(p: str | Path | None) -> str:
+            if not p:
+                return ""
+            sp = Path(str(p)).expanduser()
+            return str(sp) if detail else sp.name
+
+        def _maybe_url(u: str) -> str:
+            if not u or detail:
+                return str(u or "")
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(str(u))
+                return f"{parsed.scheme}://{parsed.hostname or ''}" if parsed.scheme else ""
+            except Exception:
+                return ""
+
+        persist_raw = vec.get("persist_dir", "./db")
+        persist = (ROOT / persist_raw) if not Path(persist_raw).is_absolute() else Path(persist_raw)
         return {
-            "bookmarks_dir": str(svc.dir),
+            "bookmarks_dir": _maybe_path(svc.dir),
             "vector_db": {
                 "type":        vec.get("type", "chromadb"),
-                "persist_dir": str((ROOT / vec.get("persist_dir", "./db"))
-                                   .resolve()) if not Path(vec.get("persist_dir", "./db")).is_absolute()
-                                   else str(Path(vec.get("persist_dir", "./db")).resolve()),
+                "persist_dir": _maybe_path(persist.resolve()),
                 "collection":  vec.get("collection", "bookmarks"),
                 "enabled":     vec_enabled,
                 "installed":   vec_installed,
@@ -590,7 +616,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             "llm": {
                 "provider":  llm.get("provider", ""),
                 "model":     llm.get("model", ""),
-                "base_url":  llm.get("base_url", ""),
+                "base_url":  _maybe_url(llm.get("base_url", "")),
                 "n_results": int(llm.get("n_results", 5) or 5),
             },
             "web": {
@@ -598,8 +624,8 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
                 "port": int(web_cfg.get("port", 1000)),
             },
             "logs": {
-                "file": str(log_path) if log_path else "",
-                "dir":  str(log_path.parent) if log_path else "",
+                "file": _maybe_path(log_path),
+                "dir":  _maybe_path(log_path.parent) if log_path else "",
             },
         }
 
@@ -986,8 +1012,13 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             raise HTTPException(409, f"Excluded — {e.reason}")
         except ValueError as e:
             raise HTTPException(400, str(e))
-        except Exception as e:
-            raise HTTPException(500, f"{type(e).__name__}: {e}")
+        except Exception:
+            # Don't echo internal exception text to the client — it's
+            # the most common path for filesystem layout / auth-layer
+            # detail to leak. The full traceback is in the server log.
+            # (P1-08)
+            log.exception("api_link_failed", extra={"url": req.url[:200]})
+            raise HTTPException(500, "Failed to add link — see server logs.")
         svc.refresh(force=True)
         fm = svc.store.read_frontmatter(path)
         return LinkAddResponse(id=bm_id(fm), url=str(fm.get("url", "")),
@@ -1018,9 +1049,13 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         try:
             hits = vector_search(q.query, cfg, q.n, q.min_importance)
         except SystemExit as e:
+            # SystemExit messages here are pre-canned, user-facing strings
+            # (e.g. "Collection not found — run: booki ingest") so it's
+            # safe to pass them through.
             raise HTTPException(400, str(e))
-        except Exception as e:
-            raise HTTPException(500, f"Vector search failed: {e}")
+        except Exception:
+            log.exception("ask_vector_search_failed")
+            raise HTTPException(500, "Vector search failed — see server logs.")
 
         llm_cfg = cfg.get("llm", {})
         result = AskResult(
@@ -1034,8 +1069,10 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
 
         try:
             result.answer = ask_llm(build_prompt(q.query, hits), llm_cfg)
-        except Exception as e:
-            raise HTTPException(502, f"LLM call failed: {e}")
+        except Exception:
+            log.exception("ask_llm_failed",
+                          extra={"provider": str(llm_cfg.get("provider", ""))})
+            raise HTTPException(502, "LLM call failed — see server logs.")
         return result
 
     # ── export system ────────────────────────────────────────────────────────

@@ -447,6 +447,40 @@ def _yaml_dump_flat(d: dict) -> str:
     return "\n".join(lines)
 
 
+def _content_disposition(filename: str, *, fallback: str = "export.bin") -> str:
+    """Build a safe `Content-Disposition: attachment; …` header value.
+
+    `filename` comes from an Exporter plugin — without escaping, a name
+    containing CR / LF / NUL / `"` lets a hostile or buggy plugin inject
+    additional response headers (CRLF) or a second `filename` parameter
+    that overrides this one. We therefore:
+      1. Strip control chars, NUL, CR, LF.
+      2. Drop path separators (these have no business in a download
+         filename and confuse certain clients).
+      3. Build both `filename="ASCII-only fallback"` (RFC 2616) and
+         `filename*=UTF-8''<percent-encoded>` (RFC 6266) so unicode
+         names round-trip on every modern browser.
+
+    (P1-03)
+    """
+    from urllib.parse import quote
+
+    raw = str(filename or "").strip()
+    raw = "".join(c for c in raw if c not in ("\r", "\n", "\x00")
+                  and ord(c) >= 0x20)
+    raw = raw.replace("/", "_").replace("\\", "_")
+    if not raw:
+        raw = fallback
+
+    ascii_safe = "".join(c if 32 <= ord(c) < 127 and c not in ('"', "\\")
+                         else "_" for c in raw)
+    if not ascii_safe.strip("_"):
+        ascii_safe = fallback
+
+    encoded = quote(raw, safe="")
+    return f'attachment; filename="{ascii_safe}"; filename*=UTF-8\'\'{encoded}'
+
+
 def _yaml_load_flat(text: str) -> dict:
     out: dict = {}
     for line in text.splitlines():
@@ -987,10 +1021,12 @@ def attach_routes(app: FastAPI, cfg: dict, config_path: Path, svc) -> None:
             raise HTTPException(400, "No items resolved from item_ids")
         try:
             return inst.preview(items, req.options, theme, theme_vars, tree=req.tree)
-        except Exception as e:
+        except Exception:
+            # Don't surface raw exception text — it can include
+            # filesystem paths and partial frontmatter. (P1-08)
             log.exception("preview_failed",
                           extra={"exporter": req.exporter, "item_count": len(items)})
-            raise HTTPException(500, f"Preview failed: {type(e).__name__}: {e}")
+            raise HTTPException(500, "Preview failed — see server logs.")
 
     # ── Run ─────────────────────────────────────────────────────────────
 
@@ -1020,10 +1056,11 @@ def attach_routes(app: FastAPI, cfg: dict, config_path: Path, svc) -> None:
             try:
                 data, filename, mime = inst.run_immediate(
                     items, req.options, theme, theme_vars, tree=req.tree)
-            except Exception as e:
+            except Exception:
+                # See P1-08 — generic message to client, full traceback to log.
                 log.exception("immediate_export_failed",
                               extra={"exporter": req.exporter, "item_count": len(items)})
-                raise HTTPException(500, f"Export failed: {type(e).__name__}: {e}")
+                raise HTTPException(500, "Export failed — see server logs.")
             log.info("immediate_export_ok",
                      extra={"exporter": req.exporter, "item_count": len(items),
                             "duration_s": round(time.monotonic() - t0, 3),
@@ -1031,7 +1068,7 @@ def attach_routes(app: FastAPI, cfg: dict, config_path: Path, svc) -> None:
             return Response(
                 content=data,
                 media_type=mime,
-                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                headers={"Content-Disposition": _content_disposition(filename)},
             )
 
         # background
