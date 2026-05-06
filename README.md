@@ -44,6 +44,8 @@ Booki pulls items from **pluggable sources** — Chrome / Safari / Firefox bookm
 
 - **🔗 Dead link detection** — flags broken bookmarks and suggests Wayback archives.
 
+- **🩹 Corrupted file handling** — a hand-edited `.md` with broken YAML or wrong field types is skipped, not fatal. The web UI shows a banner ("Skipped 5 of 346 files") and a *Manage → Doctor* panel listing every problem file with a structured reason ("`importance` should be int, got string"); `booki doctor` prints the same list in the terminal.
+
 - **🧩 Plugin tabs** — plugins ship `tab.js` + `tab.css` and add a top-level tab through a stable `window.booki` API.
 
 - **🚫 #nobuild** — plain HTML, plain JavaScript, plain CSS. Ready to explore and hack — no bundler, no transpiler, no `node_modules`.
@@ -262,7 +264,7 @@ pip install pytest                     # one-time, dev-only
 python -m pytest                       # ~1.5s, hermetic
 ```
 
-The Python suite lives under [`tests/`](tests/) and covers the bits that hurt most when broken: the bookmark file parser + URL-hash id (`test_ingest.py`), the `ItemStore` write / update / removed-flag roundtrip (`test_store.py`), every key FastAPI route via `TestClient` against a real `create_app()` (`test_web.py`), and the `booki` CLI dispatcher as a real subprocess (`test_cli.py`). All fixtures are `tmp_path`-scoped — no test touches your real `bookmarks/` or `config.toml`.
+The Python suite lives under [`tests/`](tests/) and covers the bits that hurt most when broken: the bookmark file parser + URL-hash id (`test_ingest.py`), the corrupted-file loader contract + mtime-fingerprint cache (`test_loader.py`), the `ItemStore` write / update / removed-flag roundtrip (`test_store.py`), every key FastAPI route via `TestClient` against a real `create_app()` (`test_web.py`), and the `booki` CLI dispatcher as a real subprocess (`test_cli.py`). All fixtures are `tmp_path`-scoped — no test touches your real `bookmarks/` or `config.toml`.
 
 The Rust manager has its own suite under `tools/booki-manager/`:
 
