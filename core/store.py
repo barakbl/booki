@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -26,6 +27,8 @@ from pathlib import Path
 from typing import Optional
 
 from plugins.base import Item
+
+log = logging.getLogger("booki.store")
 
 
 # ─── Constants ────────────────────────────────────────────────────────────────
@@ -50,6 +53,35 @@ FM_ORDER = [
 # the `booki_` prefix so it can't collide with any source-supplied or
 # enricher-supplied field name and is obvious in raw YAML.
 USER_OVERRIDE_KEY = "booki_user_override"
+
+
+# ─── Body markers ─────────────────────────────────────────────────────────────
+#
+# Booki's auto-rendered body content lives between two HTML-comment markers,
+# so users can write their own prose before or after the block without it
+# being clobbered on re-sync. Markers are HTML comments so they render
+# invisibly in any markdown viewer.
+#
+# Rules:
+#   • New file → body is `START\n…content…\nEND`, nothing outside.
+#   • Existing file with both markers → only the content between is replaced;
+#     anything before START or after END is preserved verbatim.
+#   • No START marker (user removed it, or a legacy file pre-dating this
+#     feature) → Booki keeps its hands off the body entirely. Frontmatter
+#     edits still flow.
+#   • START present but END missing → log.warn every sync; body left as-is.
+#
+# Detection is token-based (`booki:start` / `booki:end`) so users can rewrite
+# the trailing comment text without breaking marker recognition.
+
+BOOKI_START_MARKER = (
+    "<!-- booki:start — auto-managed by booki; "
+    "edits inside will be overwritten -->"
+)
+BOOKI_END_MARKER = "<!-- booki:end -->"
+
+_BOOKI_START_RE = re.compile(r"<!--\s*booki:start\b[^\n]*?-->", re.IGNORECASE)
+_BOOKI_END_RE   = re.compile(r"<!--\s*booki:end\b[^\n]*?-->",   re.IGNORECASE)
 
 # Fields the user may edit by hand — never overwritten by a re-fetch.
 USER_EDITABLE = {"importance", "tags", "lists", "notes"}
@@ -299,6 +331,9 @@ class ItemStore:
         old_path = self.find_existing(item.path, item.url) or self.find_anywhere(item.url)
         existing = self.read_frontmatter(old_path) if old_path else {}
         is_new = old_path is None
+        prior_content = (
+            old_path.read_text(encoding="utf-8") if old_path and old_path.exists() else ""
+        )
 
         existing_primary_slug = _slug(str(existing.get("source", ""))) if existing else ""
         incoming_slug = item.source
@@ -311,7 +346,7 @@ class ItemStore:
         target = old_path if pin_to_existing else self.file_for(item)
 
         fm = self._build_fm(item, today, existing, pin=pin_to_existing)
-        content = self._render(fm)
+        content = self._compose_file(fm, prior_content=prior_content, file_path=target)
 
         if dry_run:
             return WriteResult(path=target, is_new=is_new)
@@ -333,7 +368,11 @@ class ItemStore:
             return False
         fm[flag] = True
         fm["last_sync"] = today
-        file_path.write_text(self._render(fm), encoding="utf-8")
+        prior = file_path.read_text(encoding="utf-8")
+        file_path.write_text(
+            self._compose_file(fm, prior_content=prior, file_path=file_path),
+            encoding="utf-8",
+        )
         return True
 
     def detach_source(self, file_path: Path, source_slug: str, today: str, *,
@@ -371,7 +410,11 @@ class ItemStore:
             if primary == slug:
                 fm["source"] = sources[0]
             fm["last_sync"] = today
-            file_path.write_text(self._render(fm), encoding="utf-8")
+            prior = file_path.read_text(encoding="utf-8")
+            file_path.write_text(
+                self._compose_file(fm, prior_content=prior, file_path=file_path),
+                encoding="utf-8",
+            )
             return "detached"
 
         # Sole (or no) source left — fall through to the removed-flag flip.
@@ -380,16 +423,23 @@ class ItemStore:
         fm[removed_flag] = True
         fm["sources"] = []
         fm["last_sync"] = today
-        file_path.write_text(self._render(fm), encoding="utf-8")
+        prior = file_path.read_text(encoding="utf-8")
+        file_path.write_text(
+            self._compose_file(fm, prior_content=prior, file_path=file_path),
+            encoding="utf-8",
+        )
         return "removed"
 
     def update_fields(self, file_path: Path, **updates) -> bool:
+        if not file_path.exists():
+            return False
+        prior = file_path.read_text(encoding="utf-8")
         fm = self.read_frontmatter(file_path)
         if not fm:
             return False
         fm.update(updates)
-        new_content = self._render(fm)
-        if new_content != file_path.read_text(encoding="utf-8"):
+        new_content = self._compose_file(fm, prior_content=prior, file_path=file_path)
+        if new_content != prior:
             file_path.write_text(new_content, encoding="utf-8")
             return True
         return False
@@ -549,12 +599,14 @@ class ItemStore:
         lines.append("---")
         return "\n".join(lines) + "\n"
 
-    def _render(self, fm: dict) -> str:
-        # Body reflects the raw source/enricher fields. User overrides live
-        # only in the override block — they do not rewrite the human-readable
-        # body. The view-overlay is applied at read time by every consumer.
+    def _render_body_content(self, fm: dict) -> str:
+        """Render the human-readable body content (no markers, no frontmatter).
+
+        This is what goes *between* the booki:start/booki:end markers. The
+        view-overlay is applied at read time by every consumer; the body
+        itself reflects the raw source/enricher fields.
+        """
         lines: list[str] = []
-        lines.append("")
         title = _escape_md(str(fm.get("title", "")))
         lines.append(f"# {title}")
         lines.append("")
@@ -565,16 +617,68 @@ class ItemStore:
         if fm.get("removed_from_browser") or fm.get("removed_from_source"):
             lines.append("")
             lines.append("> ⚠️ No longer present at source (kept for your records)")
-        lines.append("")
 
         if notes := str(fm.get("notes", "")).strip():
-            lines.extend(["## Notes", "", notes, ""])
+            lines.extend(["", "## Notes", "", notes])
         if summary := str(fm.get("summary", "")).strip():
-            lines.extend(["## Summary", "", summary, ""])
+            lines.extend(["", "## Summary", "", summary])
         if keywords := fm.get("keywords") or []:
-            lines.extend(["## Keywords", "", ", ".join(str(k) for k in keywords), ""])
+            lines.extend(["", "## Keywords", "", ", ".join(str(k) for k in keywords)])
 
-        return self._render_frontmatter(fm) + "\n".join(lines).rstrip() + "\n"
+        return "\n".join(lines).rstrip()
+
+    def _render(self, fm: dict) -> str:
+        """Render a fresh file (frontmatter + marker-wrapped body).
+
+        Used when no prior content exists. Existing files go through
+        `_compose_file` so user edits outside the markers are preserved.
+        """
+        return self._compose_file(fm, prior_content="", file_path=None)
+
+    def _compose_file(self, fm: dict, *, prior_content: str,
+                      file_path: Optional[Path]) -> str:
+        """
+        Build the full file text.
+
+        Composition rules (see Body markers section above):
+          • No prior content → frontmatter + START + body + END.
+          • Prior content with START + END → replace only between markers,
+            preserve the text before START and after END verbatim.
+          • Prior content with START only → log.warn, keep prior body
+            untouched. Frontmatter still gets the new values.
+          • Prior content with neither marker → keep prior body untouched
+            (user opted out, or legacy file). Frontmatter still updates.
+        """
+        fm_block = self._render_frontmatter(fm)
+        body_inside = self._render_body_content(fm)
+
+        if not prior_content:
+            return (
+                fm_block
+                + "\n" + BOOKI_START_MARKER
+                + "\n\n" + body_inside
+                + "\n\n" + BOOKI_END_MARKER + "\n"
+            )
+
+        m = re.match(r"^---\n(.*?)\n---\n", prior_content, re.DOTALL)
+        prior_body = prior_content[m.end():] if m else prior_content
+
+        start_m = _BOOKI_START_RE.search(prior_body)
+        if start_m is None:
+            return fm_block + prior_body
+
+        end_m = _BOOKI_END_RE.search(prior_body, start_m.end())
+        if end_m is None:
+            log.warning(
+                "booki_end_marker_missing",
+                extra={"file": str(file_path) if file_path else ""},
+            )
+            return fm_block + prior_body
+
+        before = prior_body[:start_m.end()]
+        after = prior_body[end_m.start():]
+        new_body = before + "\n\n" + body_inside + "\n\n" + after
+        return fm_block + new_body
 
     def _prune_empty(self, directory: Path) -> None:
         try:

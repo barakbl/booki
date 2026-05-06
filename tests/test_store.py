@@ -14,7 +14,13 @@ from pathlib import Path
 import pytest
 
 from core.ingest import parse_bookmark_file
-from core.store import ItemStore, today_str, view_fm
+from core.store import (
+    BOOKI_END_MARKER,
+    BOOKI_START_MARKER,
+    ItemStore,
+    today_str,
+    view_fm,
+)
 from plugins.base import Item
 
 
@@ -180,6 +186,101 @@ def test_update_user_fields_leaves_body_untouched(store: ItemStore) -> None:
     # And the source title is still in the body — overrides are
     # frontmatter-only, view-overlay is a read-time concern.
     assert "# Source Title" in body_after
+
+
+# ─── body markers ────────────────────────────────────────────────────────
+
+def test_first_write_wraps_body_in_booki_markers(store: ItemStore) -> None:
+    """A freshly created file has the START/END markers around all of
+    Booki's auto-rendered body content, with nothing outside."""
+    path = store.write(_make_item(title="Hello"), today_str()).path
+    text = path.read_text(encoding="utf-8")
+
+    assert BOOKI_START_MARKER in text
+    assert BOOKI_END_MARKER in text
+    # Title heading lives inside the markers (option 2a — entire body managed).
+    after_marker = text.split(BOOKI_START_MARKER, 1)[1]
+    inside, after_end = after_marker.split(BOOKI_END_MARKER, 1)
+    assert "# Hello" in inside
+    # Nothing outside the END marker on first write.
+    assert after_end.strip() == ""
+
+
+def test_resync_preserves_user_content_outside_markers(store: ItemStore) -> None:
+    """User prose before booki:start and after booki:end is sacred — a
+    re-sync that updates source-side fields must leave it byte-identical."""
+    path = store.write(_make_item(title="Original"), today_str()).path
+    original = path.read_text(encoding="utf-8")
+
+    # User adds prose before and after the booki block.
+    augmented = original.replace(
+        BOOKI_START_MARKER,
+        "## My personal notes\n\nThis link is gold.\n\n" + BOOKI_START_MARKER,
+    ).replace(
+        BOOKI_END_MARKER,
+        BOOKI_END_MARKER + "\n\n## After\n\nMore prose here.",
+    )
+    path.write_text(augmented, encoding="utf-8")
+
+    # Source re-sync with a different importance so the inside content changes.
+    store.write(_make_item(title="Original",
+                           extras={"importance_hint": 5}), today_str())
+
+    after = path.read_text(encoding="utf-8")
+    assert "## My personal notes" in after
+    assert "This link is gold." in after
+    assert "## After" in after
+    assert "More prose here." in after
+    # Markers still both present.
+    assert BOOKI_START_MARKER in after
+    assert BOOKI_END_MARKER in after
+
+
+def test_resync_skips_body_when_start_marker_removed(store: ItemStore) -> None:
+    """If the user removes the START marker, Booki keeps its hands off the
+    body entirely — no warning, no edit. Frontmatter still flows."""
+    path = store.write(_make_item(title="Hello"), today_str()).path
+    # User strips both markers and writes their own body.
+    fm_block, _, _ = path.read_text(encoding="utf-8").partition(BOOKI_START_MARKER)
+    custom_body = "# My own title\n\nMy personal notes only.\n"
+    path.write_text(fm_block + custom_body, encoding="utf-8")
+
+    # A re-sync changes notes (frontmatter field) — body must stay user-owned.
+    store.update_fields(path, notes="should not appear in body")
+
+    after = path.read_text(encoding="utf-8")
+    assert "# My own title" in after
+    assert "My personal notes only." in after
+    # Notes section was NOT injected — no markers means no body edits.
+    assert "## Notes" not in after.split("---\n", 2)[2]
+    # Frontmatter was still updated.
+    assert store.read_frontmatter(path)["notes"] == "should not appear in body"
+
+
+def test_resync_logs_warning_when_only_end_marker_missing(
+    store: ItemStore, caplog
+) -> None:
+    """START present, END missing → log.warn every sync; body untouched.
+    The user's broken markup is a structural issue we surface but never
+    silently repair."""
+    path = store.write(_make_item(title="Hello"), today_str()).path
+    # Strip the END marker, keep START.
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace(BOOKI_END_MARKER, ""), encoding="utf-8")
+
+    pre = path.read_text(encoding="utf-8")
+    body_pre = pre.split("---\n", 2)[2]
+
+    import logging as _logging
+    with caplog.at_level(_logging.WARNING, logger="booki.store"):
+        store.update_fields(path, notes="another note")
+
+    body_post = path.read_text(encoding="utf-8").split("---\n", 2)[2]
+    assert body_post == body_pre   # body byte-identical
+    assert any(
+        "booki_end_marker_missing" in rec.message
+        for rec in caplog.records
+    )
 
 
 def test_user_block_survives_resync(store: ItemStore) -> None:
