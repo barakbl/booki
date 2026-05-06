@@ -83,6 +83,20 @@ BOOKI_END_MARKER = "<!-- booki:end -->"
 _BOOKI_START_RE = re.compile(r"<!--\s*booki:start\b[^\n]*?-->", re.IGNORECASE)
 _BOOKI_END_RE   = re.compile(r"<!--\s*booki:end\b[^\n]*?-->",   re.IGNORECASE)
 
+
+def _neutralize_html_comments(s: str) -> str:
+    """Stop source-supplied content from forging marker tags.
+
+    A hostile source could otherwise plant `<!-- booki:end -->` inside a
+    title / summary / notes string; the next sync's marker regex would
+    pick that up as the end of the managed block and let post-marker
+    content leak across re-syncs. We replace the literal comment opener
+    with `&lt;!--` — viewers render `&lt;` as `<` so the user still sees
+    the attempted injection in plain text, but Booki's regex never
+    matches a real HTML comment in the body.
+    """
+    return s.replace("<!--", "&lt;!--")
+
 # Fields the user may edit by hand — never overwritten by a re-fetch.
 USER_EDITABLE = {"importance", "tags", "lists", "notes"}
 
@@ -602,28 +616,31 @@ class ItemStore:
     def _render_body_content(self, fm: dict) -> str:
         """Render the human-readable body content (no markers, no frontmatter).
 
-        This is what goes *between* the booki:start/booki:end markers. The
-        view-overlay is applied at read time by every consumer; the body
-        itself reflects the raw source/enricher fields.
+        Every source-supplied string is run through `_neutralize_html_comments`
+        before it lands in the body so a hostile source can't plant a fake
+        `booki:end` marker that would split the managed block.
         """
+        n = _neutralize_html_comments
+
         lines: list[str] = []
-        title = _escape_md(str(fm.get("title", "")))
+        title = n(_escape_md(str(fm.get("title", ""))))
         lines.append(f"# {title}")
         lines.append("")
-        lines.append(f"**URL:** {fm.get('url','')}  ")
-        lines.append(f"**Path:** {fm.get('browser_path','')}  ")
+        lines.append(f"**URL:** {n(str(fm.get('url','')))}  ")
+        lines.append(f"**Path:** {n(str(fm.get('browser_path','')))}  ")
         lines.append(f"**Importance:** ★{fm.get('importance', 0)}")
 
         if fm.get("removed_from_browser") or fm.get("removed_from_source"):
             lines.append("")
             lines.append("> ⚠️ No longer present at source (kept for your records)")
 
-        if notes := str(fm.get("notes", "")).strip():
+        if notes := n(str(fm.get("notes", "")).strip()):
             lines.extend(["", "## Notes", "", notes])
-        if summary := str(fm.get("summary", "")).strip():
+        if summary := n(str(fm.get("summary", "")).strip()):
             lines.extend(["", "## Summary", "", summary])
         if keywords := fm.get("keywords") or []:
-            lines.extend(["", "## Keywords", "", ", ".join(str(k) for k in keywords)])
+            lines.extend(["", "## Keywords", "",
+                          ", ".join(n(str(k)) for k in keywords)])
 
         return "\n".join(lines).rstrip()
 
