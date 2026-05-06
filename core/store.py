@@ -43,8 +43,13 @@ FM_ORDER = [
     "status", "archive_url",
     "removed_from_browser", "removed_from_source",
     "last_enriched", "enrich_source", "page_title", "summary", "keywords",
-    "user",
+    "booki_user_override",
 ]
+
+# Frontmatter key holding the user's manual-override block. Namespaced with
+# the `booki_` prefix so it can't collide with any source-supplied or
+# enricher-supplied field name and is obvious in raw YAML.
+USER_OVERRIDE_KEY = "booki_user_override"
 
 # Fields the user may edit by hand — never overwritten by a re-fetch.
 USER_EDITABLE = {"importance", "tags", "lists", "notes"}
@@ -153,22 +158,22 @@ def today_str() -> str:
 
 def view_fm(fm: dict) -> dict:
     """
-    Return a flat view of `fm` with the nested `user:` block overlaid on top.
+    Return a flat view of `fm` with the nested override block overlaid.
 
     On disk, frontmatter has two layers:
       - top-level keys written by sources & enrichers (authoritative source data)
-      - `user: { … }` block — a user's hand-edits that should shadow the
-        authoritative values everywhere we display, search, or export.
+      - `booki_user_override: { … }` — a user's hand-edits that should shadow
+        the authoritative values everywhere we display, search, or export.
 
     Readers go through this so a user's edited title, summary, tags, etc.
     win over whatever the source / enricher last wrote, while the original
-    values are preserved underneath as a fallback. The `user` key itself
+    values are preserved underneath as a fallback. The override key itself
     is dropped from the view — it's an internal detail.
     """
-    overrides = fm.get("user")
+    overrides = fm.get(USER_OVERRIDE_KEY)
     if not isinstance(overrides, dict) or not overrides:
-        return {k: v for k, v in fm.items() if k != "user"}
-    out = {k: v for k, v in fm.items() if k != "user"}
+        return {k: v for k, v in fm.items() if k != USER_OVERRIDE_KEY}
+    out = {k: v for k, v in fm.items() if k != USER_OVERRIDE_KEY}
     for k, v in overrides.items():
         out[k] = v
     return out
@@ -391,24 +396,35 @@ class ItemStore:
 
     def update_user_fields(self, file_path: Path, **updates) -> bool:
         """
-        Merge `updates` into the file's nested `user:` override block.
+        Merge `updates` into the file's `booki_user_override` block.
 
         This is how UI / manual edits land on disk: the user's value goes
-        into `user.<key>` and shadows the authoritative top-level value at
-        read time (see `view_fm`). The top-level value is left intact so
-        clearing the override (deleting the key from `user`) reveals the
+        into the override block and shadows the authoritative top-level
+        value at read time (see `view_fm`). The top-level value is left
+        intact so clearing an override (popping the key) reveals the
         original source / enricher value again.
+
+        Surgical: only the frontmatter YAML is rewritten — the markdown
+        body below `---` is left byte-for-byte unchanged. UI metadata
+        edits never touch the human-readable content.
         """
-        fm = self.read_frontmatter(file_path)
-        if not fm:
+        if not file_path.exists():
             return False
-        existing_user = fm.get("user")
+        original = file_path.read_text(encoding="utf-8")
+        m = re.match(r"^---\n(.*?)\n---\n", original, re.DOTALL)
+        if not m:
+            return False
+        body = original[m.end():]
+
+        fm = _parse_yaml_block(m.group(1))
+        existing_user = fm.get(USER_OVERRIDE_KEY)
         user_block = dict(existing_user) if isinstance(existing_user, dict) else {}
         for k, v in updates.items():
             user_block[k] = v
-        fm["user"] = user_block
-        new_content = self._render(fm)
-        if new_content != file_path.read_text(encoding="utf-8"):
+        fm[USER_OVERRIDE_KEY] = user_block
+
+        new_content = self._render_frontmatter(fm) + body
+        if new_content != original:
             file_path.write_text(new_content, encoding="utf-8")
             return True
         return False
@@ -517,7 +533,10 @@ class ItemStore:
 
         return fm
 
-    def _render(self, fm: dict) -> str:
+    def _render_frontmatter(self, fm: dict) -> str:
+        """Render just the YAML frontmatter block including the closing
+        `---\\n`. Pair with the file's existing body to do surgical
+        frontmatter-only rewrites (see `update_user_fields`)."""
         lines = ["---"]
         seen: set[str] = set()
         for key in FM_ORDER:
@@ -528,32 +547,34 @@ class ItemStore:
         for key in sorted(k for k in fm if k not in seen):
             lines.append(f"{key}: {_yaml_str(fm[key])}")
         lines.append("---")
-        lines.append("")
+        return "\n".join(lines) + "\n"
 
-        # Body rendering reflects the view (user-overridden values shadow
-        # source / enricher values) so the human-readable section of the
-        # file matches what the UI / search / export show.
-        view = view_fm(fm)
-        title = _escape_md(str(view.get("title", "")))
+    def _render(self, fm: dict) -> str:
+        # Body reflects the raw source/enricher fields. User overrides live
+        # only in the override block — they do not rewrite the human-readable
+        # body. The view-overlay is applied at read time by every consumer.
+        lines: list[str] = []
+        lines.append("")
+        title = _escape_md(str(fm.get("title", "")))
         lines.append(f"# {title}")
         lines.append("")
-        lines.append(f"**URL:** {view.get('url','')}  ")
-        lines.append(f"**Path:** {view.get('browser_path','')}  ")
-        lines.append(f"**Importance:** ★{view.get('importance', 0)}")
+        lines.append(f"**URL:** {fm.get('url','')}  ")
+        lines.append(f"**Path:** {fm.get('browser_path','')}  ")
+        lines.append(f"**Importance:** ★{fm.get('importance', 0)}")
 
-        if view.get("removed_from_browser") or view.get("removed_from_source"):
+        if fm.get("removed_from_browser") or fm.get("removed_from_source"):
             lines.append("")
             lines.append("> ⚠️ No longer present at source (kept for your records)")
         lines.append("")
 
-        if notes := str(view.get("notes", "")).strip():
+        if notes := str(fm.get("notes", "")).strip():
             lines.extend(["## Notes", "", notes, ""])
-        if summary := str(view.get("summary", "")).strip():
+        if summary := str(fm.get("summary", "")).strip():
             lines.extend(["## Summary", "", summary, ""])
-        if keywords := view.get("keywords") or []:
+        if keywords := fm.get("keywords") or []:
             lines.extend(["## Keywords", "", ", ".join(str(k) for k in keywords), ""])
 
-        return "\n".join(lines).rstrip() + "\n"
+        return self._render_frontmatter(fm) + "\n".join(lines).rstrip() + "\n"
 
     def _prune_empty(self, directory: Path) -> None:
         try:
