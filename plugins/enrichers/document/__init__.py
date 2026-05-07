@@ -1,7 +1,6 @@
 """
 plugins.enrichers.document — identify document bookmarks (PDFs, ebooks,
-office files, plain-text formats) AND contribute the Documents tab to the
-web UI.
+office files, plain-text formats).
 
 Detection is URL-pattern-only (extension on the URL path, query stripped).
 Per the Stage 1 photo precedent, the enricher takes ownership of the
@@ -10,6 +9,9 @@ preserving any explicit kind set by another source (e.g. `kind=file` from
 the directory plugin). It always adds `"document"` to the cross-cutting
 `sources` list, so the Documents tab can find every matched item via
 ``kind == "document"`` OR ``"document" in sources``.
+
+The Documents tab itself lives in core (`web/app.js`) — it shows up
+regardless of whether this enricher is enabled.
 
 Config (all optional):
 
@@ -36,7 +38,7 @@ from datetime import date, datetime
 from typing import Optional
 from urllib.parse import urlsplit
 
-from ...base import Enricher, TabContribution, register_enricher, register_tab
+from ...base import Enricher, register_enricher
 
 log = logging.getLogger("booki.enrichers.document")
 
@@ -202,14 +204,3 @@ class DocumentEnricher(Enricher):
             {"name": "document_status",        "label": "Status",      "group": g, "format": "text"},
             {"name": "document_last_enriched", "label": "Enriched on", "group": g, "format": "date"},
         ]
-
-
-# Tab contribution — exercised by the Stage 2 plugin tab pipeline.
-register_tab(TabContribution(
-    id="documents",
-    label="Documents",
-    icon="📄",
-    order=25,                # between Photos (20) and Videos (30)
-    module="tab.js",
-    styles=["tab.css"],
-))

@@ -1271,8 +1271,9 @@ function refreshAdvancedFilters(scope) {
 function notifyAdvChange(scope) {
   refreshAdvancedFilters(scope);
   if (scope === "search") { try { applyFilter(); } catch (e) { console.error(e); } }
-  if (scope === "photo")  { try { renderPhotoGrid(); } catch {} }
-  if (scope === "video")  { try { renderVideoGrid(); } catch {} }
+  if (scope === "photo")    { try { renderPhotoGrid(); } catch {} }
+  if (scope === "video")    { try { renderVideoGrid(); } catch {} }
+  if (scope === "document") { try { renderDocumentResults(); } catch {} }
   for (const cb of _advChangeListeners) {
     try { cb(state.advByScope[scope], scope); } catch (e) { console.error(e); }
   }
@@ -2595,6 +2596,252 @@ function renderVideoGrid() {
   grid.innerHTML = "";
   grid.appendChild(frag);
   refreshTabExportButton("videos");
+}
+
+// ─── Documents tab ─────────────────────────────────────────────────
+//
+// Used to live in `plugins/enrichers/document/web/static/tab.js`. Now part
+// of core so the tab is always present even with the document enricher
+// disabled — anything tagged `kind=document` (or that has `"document"`
+// in its `sources` list) shows up here regardless of who set it.
+
+const DOCUMENT_ICONS = {
+  pdf:  "📕",
+  doc:  "📘", docx: "📘", odt: "📘", pages: "📘", rtf: "📘",
+  md:   "📝",
+  txt:  "📃", rst:  "📃", org:  "📃",
+  tex:  "📐",
+  epub: "📖", mobi: "📖", azw3: "📖", azw:  "📖",
+  csv:  "📊", tsv:  "📊",
+};
+
+function isDocumentBookmark(b) {
+  return b.kind === "document" || (b.sources || []).includes("document");
+}
+
+function documentTypeOf(b) {
+  const t = (b.extras && b.extras.document_type) || "";
+  if (t) return String(t).toLowerCase();
+  // Fall back to the URL path's extension so newly-added items render with
+  // the right icon even before the enricher runs.
+  const url = b.url || "";
+  const m = url.split(/[?#]/, 1)[0].toLowerCase().match(/\.([a-z0-9]+)$/);
+  return m ? m[1] : "";
+}
+
+function documentIconFor(b) {
+  return DOCUMENT_ICONS[documentTypeOf(b)] || "📄";
+}
+
+Tabs.register({
+  id: "documents", label: "Documents", icon: "📄", order: 25,
+  mount(el) {
+    el.innerHTML = `
+      <div class="doc-tab scoped-tab">
+        <header class="tab-header">
+          <h2>📄 Documents</h2>
+          <p class="tab-sub" id="docCount">—</p>
+          ${viewToggleHtml("documents", ["list", "grid"], "list")}
+          <button type="button" class="btn tab-export-btn" data-tab-export="documents"
+                  title="Export the documents currently shown" disabled>Export</button>
+        </header>
+        <div class="search-box scoped-search" id="docSearchBox">
+          <span class="search-icon">🔎</span>
+          <input id="docFindInput" type="search" autocomplete="off"
+                 autocapitalize="off" autocorrect="off" spellcheck="false"
+                 placeholder="Search documents by title or URL…">
+          <span class="hint">↵ open · click for details</span>
+        </div>
+        <div class="adv-host" id="docAdvHost"></div>
+        <div id="docResults"></div>
+        <p class="tab-empty hidden" id="docEmpty">
+          No documents yet — the document enricher tags items by URL extension.<br>
+          Run <code>booki sync --no-sync --enrich-meta --enricher document --all</code>
+          to backfill.
+        </p>
+        <p class="tab-empty hidden" id="docNoMatch">
+          No documents match your search.
+        </p>`;
+
+    wireViewToggle(el, "documents", () => renderDocumentResults());
+
+    const input = document.getElementById("docFindInput");
+    input.addEventListener("input", renderDocumentResults);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const first = document.querySelector("#docResults [data-id]");
+        if (first) {
+          const id = first.dataset.id;
+          const bm = state.all.find(b => b.id === id);
+          if (bm?.url) openUrlInNewTab(bm.url);
+        }
+      } else if (e.key === "Escape") {
+        if (input.value) { input.value = ""; renderDocumentResults(); }
+        else input.blur();
+      }
+    });
+
+    const advHost = document.getElementById("docAdvHost");
+    if (advHost) mountAdvancedSearch(advHost, { scope: "document" });
+  },
+  onShow() {
+    renderDocumentResults();
+    document.getElementById("docFindInput")?.focus();
+    refreshExportButton();
+  },
+  getSelection: () => ({ kind: "document", ids: idsFromContainer("#docResults") }),
+});
+
+function renderDocumentResults() {
+  const host    = document.getElementById("docResults");
+  const count   = document.getElementById("docCount");
+  const empty   = document.getElementById("docEmpty");
+  const noMatch = document.getElementById("docNoMatch");
+  const input   = document.getElementById("docFindInput");
+  if (!host) return;
+
+  const fullCount = state.all.filter(isDocumentBookmark).length;
+  if (!fullCount) {
+    host.innerHTML = "";
+    count.textContent = "0 documents";
+    empty.classList.remove("hidden");
+    noMatch?.classList.add("hidden");
+    refreshTabExportButton("documents");
+    return;
+  }
+  empty.classList.add("hidden");
+
+  const adv = state.advByScope.document;
+  const advPred = makeAdvPredicate(adv);
+  const all = state.all.filter(isDocumentBookmark).filter(advPred);
+  const topSorts = advHasTop(adv);
+
+  const q = (input?.value || "").trim();
+  let scored;
+  if (q) {
+    const match = state.fuzzy ? fuzzyMatch : substringMatch;
+    scored = [];
+    for (const b of all) {
+      const tm = match(q, b.title || "");
+      const um = match(q, b.url || "");
+      const em = match(q, (b.tags || []).join(" "));
+      if (!tm && !um && !em) continue;
+      const s = (tm ? tm.score * 3   : 0)
+              + (um ? um.score * 1.2 : 0)
+              + (em ? em.score * 0.6 : 0)
+              + (b.importance || 0) * 0.5;
+      scored.push({
+        bm: b, score: s,
+        titleMatches: tm ? tm.matches : [],
+        urlMatches:   um ? um.matches : [],
+      });
+    }
+    if (topSorts) {
+      const byId = new Map(scored.map(r => [r.bm.id, r]));
+      const ordered = applyAdvSort(scored.map(r => r.bm), adv);
+      scored = ordered.map(b => byId.get(b.id)).filter(Boolean);
+    } else {
+      scored.sort((a, b) => b.score - a.score);
+    }
+  } else if (topSorts) {
+    scored = applyAdvSort(all, adv)
+      .map(b => ({ bm: b, score: 0, titleMatches: [], urlMatches: [] }));
+  } else {
+    scored = [...all]
+      .sort((a, b) => (b.importance || 0) - (a.importance || 0))
+      .map(b => ({ bm: b, score: 0, titleMatches: [], urlMatches: [] }));
+  }
+
+  count.textContent = (q || all.length !== fullCount)
+    ? `${scored.length} of ${fullCount} documents`
+    : (fullCount === 1 ? "1 document" : `${fullCount} documents`);
+
+  if (!scored.length) {
+    host.innerHTML = "";
+    noMatch.classList.remove("hidden");
+    refreshTabExportButton("documents");
+    return;
+  }
+  noMatch.classList.add("hidden");
+
+  // Top-sort already enforces its own count limit; skip the cap then.
+  const rows = topSorts ? scored : scored.slice(0, 200);
+  const mode = _viewModeFor("documents", "list");
+  host.innerHTML = mode === "grid"
+    ? _renderDocumentGrid(rows, adv)
+    : _renderDocumentList(rows, adv);
+
+  host.querySelectorAll("[data-id]").forEach(node => {
+    node.addEventListener("click", () => {
+      const id = node.dataset.id;
+      if (id) openDetail(id);
+    });
+    node.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openDetail(node.dataset.id);
+      }
+    });
+  });
+  refreshTabExportButton("documents");
+}
+
+function _renderDocumentList(rows, adv) {
+  const items = rows.map(({ bm, titleMatches, urlMatches }) => {
+    const type = documentTypeOf(bm);
+    const icon = documentIconFor(bm);
+    return `
+      <li class="doc-row" tabindex="0" data-id="${escapeHtml(bm.id)}">
+        <span class="doc-icon" aria-hidden="true">${icon}</span>
+        <div class="doc-row-body">
+          <div class="doc-row-title">${highlight(bm.title || bm.url || "(untitled)", titleMatches)}</div>
+          <div class="doc-row-url">${highlight(bm.url || "", urlMatches)}</div>
+        </div>
+        <div class="doc-row-meta">
+          ${topFieldChipHtml(bm, adv)}
+          ${type ? `<span class="doc-type-chip">${escapeHtml(type)}</span>` : ""}
+          ${bm.importance ? `<span class="doc-imp">★${bm.importance}</span>` : ""}
+          ${rowActionsHtml(bm)}
+        </div>
+      </li>`;
+  }).join("");
+  return `<ul class="doc-list">${items}</ul>`;
+}
+
+const _DOC_SUMMARY_MAX = 180;
+
+function _truncateDocSummary(s, n) {
+  const t = String(s || "").trim().replace(/\s+/g, " ");
+  return t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t;
+}
+
+function _renderDocumentGrid(rows, adv) {
+  const tiles = rows.map(({ bm }) => {
+    const type    = documentTypeOf(bm);
+    const icon    = documentIconFor(bm);
+    const summary = _truncateDocSummary(bm.summary, _DOC_SUMMARY_MAX);
+    const top     = topFieldChipHtml(bm, adv);
+    return `
+      <li class="doc-tile" tabindex="0" data-id="${escapeHtml(bm.id)}">
+        <div class="doc-tile-thumb">
+          <span class="doc-tile-icon">${icon}</span>
+          <div class="tile-actions">${rowActionsHtml(bm)}</div>
+        </div>
+        <div class="doc-tile-meta">
+          <div class="doc-tile-title" title="${escapeHtml(bm.title || '')}">${escapeHtml(bm.title || "(untitled)")}</div>
+          ${summary
+            ? `<p class="doc-tile-summary" title="${escapeHtml(bm.summary || '')}">${escapeHtml(summary)}</p>`
+            : ""}
+          <div class="doc-tile-sub">
+            ${type ? `<span class="doc-type-chip">${escapeHtml(type)}</span>` : ""}
+            ${bm.importance ? `<span class="doc-imp">★${bm.importance}</span>` : ""}
+            ${top}
+          </div>
+        </div>
+      </li>`;
+  }).join("");
+  return `<ul class="doc-grid">${tiles}</ul>`;
 }
 
 Tabs.register({

@@ -191,7 +191,7 @@ Anything not on this list is not part of the contract and may move around. If yo
 - **Lifecycle.** `mount` runs once per session, `onShow` runs every activation. Re-render in `onShow` if the tab depends on bookmark data — the host's bookmark refresh doesn't notify plugins automatically (yet).
 - **Don't rely on `state` or other private host symbols.** They're not exported and they will rename. Use `booki.bookmarks.all()`.
 
-The Documents tab ([`plugins/enrichers/document/web/static/tab.js`](../plugins/enrichers/document/web/static/tab.js)) is the reference example — about 200 lines, list + grid views, scoped search.
+For a worked example, the in-tree built-ins (Photos / Videos / Documents in `web/app.js`) follow the same `mount` / `onShow` / `getSelection` shape — they just live in core rather than in a plugin module. A plugin tab is structurally identical; the only difference is that it loads from `plugins/<slug>/web/static/tab.js` and is registered via `register_tab(TabContribution(...))` instead of being declared inline.
 
 ---
 
@@ -247,7 +247,7 @@ It immediately appears in the web wizard's exporter dropdown with the option fie
 | [`plugins/__init__.py`](../plugins/__init__.py)           | Auto-discovery (imports each subpackage so the decorators fire). |
 | [`plugins/browsers/__init__.py`](../plugins/browsers/__init__.py) | A small, self-contained example of three sources sharing parsing helpers. |
 | [`plugins/enrichers/photo/__init__.py`](../plugins/enrichers/photo/__init__.py)         | URL-pattern enricher — minimal template (no network calls). |
-| [`plugins/enrichers/document/`](../plugins/enrichers/document/)             | Enricher + tab contribution — full reference for a plugin that ships UI. |
+| [`plugins/enrichers/document/`](../plugins/enrichers/document/)             | Pure URL-pattern enricher (the Documents tab itself lives in core `web/app.js`). |
 | [`plugins/enrichers/github/__init__.py`](../plugins/enrichers/github/__init__.py)       | Network-calling enricher with retries, rate-limit handling, cooldown. |
 | [`plugins/exporters/data_dump/`](../plugins/exporters/data_dump/) | The simplest exporter — useful as a template. |
 | [`plugins/exporters/link_page/`](../plugins/exporters/link_page/) | Themed-Jinja exporter — useful as a template if your output is HTML. |

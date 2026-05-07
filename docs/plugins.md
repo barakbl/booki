@@ -77,7 +77,6 @@ Common patterns across enrichers:
 - **Soft-kind ownership.** An enricher only takes over the canonical `kind` field when the existing kind is a default (`bookmark`, `article`, empty). Explicit kinds set by source plugins (`file` from directory, `video` from youtube, `channel`) are sticky — the enricher still adds itself to the cross-cutting `sources` list so cross-cut views (Photos / Documents tabs) can find the item via `sources.includes("…")` even when `kind` is owned elsewhere.
 - **Cooldown via `<slug>_last_enriched`.** Re-runs are cheap. Pass `--all` to lift the cooldown.
 - **Disabling.** Add `disabled = true` under `[enrichers.<name>]` in `config.toml` to skip an enricher entirely.
-- **Tab contribution.** The `document` enricher also contributes the **Documents tab** to the web UI, demonstrating the end-to-end plugin-tab pipeline.
 
 ```bash
 booki sync --enrich-meta                          # run every registered enricher
@@ -99,9 +98,9 @@ A plugin can add a top-level tab to the web UI. Two pieces:
    - adds `<link>` tags for each declared CSS file,
    - dynamically `import()`s the JS module, which calls `booki.tabs.implement(id, { mount, onShow, onHide })` to wire behavior.
 
-Built-in tabs (Search / Photos / Videos / Ask / Manage) use the same registry — the contract is dogfooded.
+Built-in tabs (Search / Photos / Videos / Documents / Ask / Manage) use the same registry — the contract is dogfooded.
 
-The Documents tab in [`plugins/enrichers/document/`](../plugins/enrichers/document/) is the reference example. See [`plugins_dev.md`](plugins_dev.md#tab-plugins) for the public host surface (`window.booki.{tabs, api, bookmarks, ui, search}`).
+See [`plugins_dev.md`](plugins_dev.md#tab-plugins) for the public host surface (`window.booki.{tabs, api, bookmarks, ui, search}`).
 
 ---
 
