@@ -2725,11 +2725,11 @@ Tabs.register({
                 <div class="job-check-row"><label class="check"><input type="checkbox" data-flag="--no-sync"> Skip sync step (<code>--no-sync</code>)</label>${helpIconHtml("--no-sync")}</div>
                 <div class="job-check-row"><label class="check"><input type="checkbox" data-flag="--dry-run"> Dry run</label>${helpIconHtml("--dry-run")}</div>
                 <div class="job-source-row">
-                  <span class="job-source-label">Sources <span class="hint-text">(blank = all)</span> ${helpIconHtml("sources")}</span>
+                  <span class="job-source-label">Sources ${helpIconHtml("sources")}</span>
                   <div class="job-source-chips" id="jobSyncSources"></div>
                 </div>
                 <div class="job-source-row">
-                  <span class="job-source-label">Enrichers <span class="hint-text">(blank = all)</span> ${helpIconHtml("enrichers")}</span>
+                  <span class="job-source-label">Enrichers ${helpIconHtml("enrichers")}</span>
                   <div class="job-source-chips" id="jobSyncEnrichers"></div>
                 </div>
               </fieldset>
