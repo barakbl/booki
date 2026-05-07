@@ -41,10 +41,25 @@ from .base import (
 # Auto-discover every subpackage under plugins/. Each one's __init__.py runs
 # its registration side-effects on import. Plugins with missing optional deps
 # should still import cleanly and self-report via is_available().
+#
+# SECURITY (P3-01): drop-in plugins are FULL-TRUST. Anything under plugins/
+# runs at every booki start with the user's privileges. If you set
+# `BOOKI_PLUGINS_ALLOWLIST="browsers,rss,youtube"` in the environment, only
+# those names will be auto-imported — useful for hardened deployments and
+# for locking out a misbehaving plugin without uninstalling it.
+import os as _os
 _pkg_dir = Path(__file__).parent
+_allowlist_raw = _os.environ.get("BOOKI_PLUGINS_ALLOWLIST", "").strip()
+_allowlist = (
+    {n.strip() for n in _allowlist_raw.split(",") if n.strip()}
+    if _allowlist_raw else None
+)
 for mod in pkgutil.iter_modules([str(_pkg_dir)]):
-    if mod.ispkg and not mod.name.startswith("_"):
-        importlib.import_module(f"{__name__}.{mod.name}")
+    if not mod.ispkg or mod.name.startswith("_"):
+        continue
+    if _allowlist is not None and mod.name not in _allowlist:
+        continue
+    importlib.import_module(f"{__name__}.{mod.name}")
 
 __all__ = [
     "Enricher",

@@ -32,7 +32,7 @@ except ImportError:
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -127,8 +127,10 @@ class AskQuery(BaseModel):
 
 
 class LinkAddRequest(BaseModel):
-    url: str
-    title: Optional[str] = None
+    # Bound URL + title at the request edge so a hostile / careless
+    # caller can't push a 1 MB URL through the title-fetch path. (P1-04)
+    url: str = Field(min_length=1, max_length=4096)
+    title: Optional[str] = Field(default=None, max_length=500)
 
 
 class LinkAddResponse(BaseModel):
@@ -366,7 +368,56 @@ def _collect_schema() -> dict[str, list[dict]]:
 
 def load_config(path: Path) -> dict:
     with open(path, "rb") as f:
-        return tomllib.load(f)
+        cfg = tomllib.load(f)
+    _validate_config_security_posture(cfg)
+    return cfg
+
+
+def _validate_config_security_posture(cfg: dict) -> None:
+    """Refuse obviously-unsafe config. Logs warnings for risky-but-allowed
+    combinations so operators see them on every server start.
+
+    Specifically:
+      - `[web].host = 0.0.0.0` (or any non-loopback) without a configured
+        auth token → log a loud WARNING. (P5-01)
+      - `[web].cors_origins = ["*"]` → log WARNING (we still honour it
+        if explicitly set, but the user should see it on every start).
+        (P5-02)
+      - `[embeddings].openai_api_key` set inline → log WARNING and
+        recommend the env var. (P5-09)
+    """
+    web_cfg = (cfg.get("web") or {})
+    host = str(web_cfg.get("host", "127.0.0.1")).lower()
+    is_loopback = host in ("127.0.0.1", "localhost", "::1", "")
+    if not is_loopback:
+        log.warning(
+            "lan_bind_no_auth",
+            extra={
+                "host": host,
+                "msg": ("Booki has no built-in authentication — binding to a "
+                        "non-loopback host exposes every /api/* route, "
+                        "including bookmark exfiltration via /api/ask, to "
+                        "anyone who can reach this address. (P5-01)"),
+            },
+        )
+
+    cors = web_cfg.get("cors_origins") or []
+    if any(str(o).strip() == "*" for o in cors):
+        log.warning(
+            "cors_wildcard_enabled",
+            extra={"msg": "[web].cors_origins includes '*' — every origin "
+                          "can read /api/* responses. (P5-02)"},
+        )
+
+    embeddings = (cfg.get("embeddings") or {})
+    if str(embeddings.get("openai_api_key", "")).strip():
+        log.warning(
+            "openai_api_key_inline",
+            extra={"msg": ("[embeddings].openai_api_key is set inline in "
+                          "config.toml. Prefer the OPENAI_API_KEY env var "
+                          "so the key doesn't end up in backups / shell "
+                          "history / accidental git pushes. (P5-09)")},
+        )
 
 
 def _is_within(target: Path, root: Path) -> bool:
@@ -376,6 +427,37 @@ def _is_within(target: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _resolve_runtime_token_path(port: int) -> Path:
+    """Pick a writable, user-private location for the shutdown token.
+
+    Order of preference:
+      1. $XDG_RUNTIME_DIR/booki/shutdown-<port>.token  — Linux session dir
+         (typically /run/user/$UID, already 0700).
+      2. ~/.cache/booki/shutdown-<port>.token         — XDG fallback.
+      3. tempfile.gettempdir()/booki-<uid>-shutdown-<port>.token
+         — last resort (still chmod 0600 by caller).
+    """
+    import getpass
+    import os as _os
+    import tempfile
+
+    name = f"shutdown-{int(port)}.token"
+    runtime_dir = _os.environ.get("XDG_RUNTIME_DIR", "").strip()
+    if runtime_dir:
+        try:
+            p = Path(runtime_dir) / "booki" / name
+            return p
+        except (OSError, ValueError):
+            pass
+    cache_home = _os.environ.get("XDG_CACHE_HOME", "").strip() or str(Path.home() / ".cache")
+    try:
+        return Path(cache_home) / "booki" / name
+    except (OSError, ValueError):
+        pass
+    user = getpass.getuser() if hasattr(getpass, "getuser") else "anon"
+    return Path(tempfile.gettempdir()) / f"booki-{user}-{name}"
 
 
 def _resolved_log_path(cfg: dict) -> Optional[Path]:
@@ -439,7 +521,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
     # this via `[web].cors_origins` — set to ["*"] to disable origin checks.
     web_cfg = cfg.get("web", {}) or {}
     web_host = str(web_cfg.get("host", "127.0.0.1"))
-    web_port = int(web_cfg.get("port", 1000))
+    web_port = int(web_cfg.get("port", 8765))
     configured = [str(o).strip().rstrip("/")
                   for o in (web_cfg.get("cors_origins") or [])
                   if str(o).strip()]
@@ -515,6 +597,43 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         ".3fr", ".erf", ".kdc", ".mef", ".mrw", ".rwl",
     }
 
+    # Favicon proxy — serves the favicon for `domain` via the
+    # SSRF-gated _safe_get path. Lets the frontend display favicons
+    # without leaking every bookmark's hostname to Google. Cache in
+    # memory for a short TTL so repeated lookups don't repeat fetch.
+    # (P4-02)
+    _favicon_cache: dict[str, tuple[float, bytes, str]] = {}
+    _favicon_lock = threading.Lock()
+    _FAVICON_TTL = 12 * 3600.0  # 12h
+    _FAVICON_DOMAIN_RE = __import__("re").compile(r"^[A-Za-z0-9.\-]{1,253}$")
+
+    @app.get("/api/favicon")
+    def favicon_proxy(domain: str):
+        if not _FAVICON_DOMAIN_RE.match(domain or ""):
+            raise HTTPException(400, "invalid domain")
+        domain = domain.lower()
+        now = time.monotonic()
+        with _favicon_lock:
+            entry = _favicon_cache.get(domain)
+        if entry and entry[0] > now:
+            _, blob, mime = entry
+            return Response(content=blob, media_type=mime,
+                            headers={"Cache-Control": "public, max-age=43200"})
+        from .sync import _safe_get
+        url = f"https://{domain}/favicon.ico"
+        r = _safe_get(url, timeout=4,
+                      headers={"User-Agent": "booki/1.0 favicon-proxy"},
+                      max_bytes=256 * 1024)
+        if r is None or not r.ok or not r.content:
+            raise HTTPException(404, "favicon not found")
+        mime = (r.headers.get("Content-Type") or "image/x-icon").split(";")[0].strip()
+        if not mime.startswith("image/"):
+            mime = "image/x-icon"
+        with _favicon_lock:
+            _favicon_cache[domain] = (now + _FAVICON_TTL, r.content, mime)
+        return Response(content=r.content, media_type=mime,
+                        headers={"Cache-Control": "public, max-age=43200"})
+
     @app.get("/api/local-file")
     def local_file(path: str):
         """
@@ -538,20 +657,42 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
     def health():
         return {"ok": True, "count": len(svc._index), "bookmarks_dir": str(svc.dir)}
 
+    # Per-process shutdown token. Generated at create_app() time and
+    # written to a 0600 file under XDG_RUNTIME_DIR (or $TMPDIR / /tmp
+    # as a fallback). The booki-manager tray app reads it from the
+    # same file. Unauthenticated requests get 401 — without this any
+    # local process (browser extension, curl, malicious VS Code task)
+    # could SIGTERM the server. (P1-05)
+    import secrets as _secrets
+    _shutdown_token = _secrets.token_urlsafe(32)
+    _token_path = _resolve_runtime_token_path(web_port)
+    try:
+        _token_path.parent.mkdir(parents=True, exist_ok=True)
+        _token_path.write_text(_shutdown_token, encoding="utf-8")
+        try:
+            import os as _os
+            _os.chmod(_token_path, 0o600)
+        except OSError:
+            pass
+        log.info("shutdown_token_written", extra={"path": str(_token_path)})
+    except OSError:
+        log.warning("shutdown_token_write_failed",
+                    extra={"path": str(_token_path)})
+
+    from fastapi import Header
+
     @app.post("/api/shutdown")
-    def shutdown():
+    def shutdown(authorization: Optional[str] = Header(default=None)):
         """Trigger a clean uvicorn shutdown.
 
-        Used by the Rust booki-manager's tray menu (Web interface →
-        Stop / Restart) so the manager can stop *any* booki web server,
-        including ones it didn't spawn itself. The HTTP path is portable
-        (no PID hunting) and lets uvicorn drain in-flight requests
-        before exiting.
-
-        Implementation: send SIGTERM to our own process from a tiny
-        background thread. The current request returns first; uvicorn's
-        signal handler then runs the lifespan-shutdown sequence.
+        Caller must present `Authorization: Bearer <token>` matching the
+        per-process token written to the runtime token file. The
+        booki-manager reads this file when it's started by the same
+        user; nobody else should have read access (chmod 0600).
         """
+        expected = f"Bearer {_shutdown_token}"
+        if not authorization or not _secrets.compare_digest(authorization, expected):
+            raise HTTPException(401, "Unauthorized — present the per-process shutdown token.")
         import os, signal, threading
         threading.Thread(
             target=lambda: (time.sleep(0.05), os.kill(os.getpid(), signal.SIGTERM)),
@@ -560,8 +701,15 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         return {"ok": True, "message": "shutting down"}
 
     @app.get("/api/info")
-    def info():
-        """Static-ish runtime info (provider names, paths) for the Manage tab."""
+    def info(detail: bool = False):
+        """Static-ish runtime info for the Manage tab.
+
+        By default we strip absolute paths and remote-endpoint URLs to
+        their basenames — even on a localhost-only deployment those
+        details make lateral movement easier if the page is ever framed
+        or the response sniffed via a future browser-side hole. Set
+        `?detail=true` to opt back in to the full picture. (P1-07)
+        """
         embed = (cfg.get("embeddings", {}) or {})
         llm = (cfg.get("llm", {}) or {})
         web_cfg = (cfg.get("web", {}) or {})
@@ -570,13 +718,30 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         from .ingest import chromadb_installed, vector_db_enabled
         vec_enabled = vector_db_enabled(cfg)
         vec_installed = chromadb_installed()
+
+        def _maybe_path(p: str | Path | None) -> str:
+            if not p:
+                return ""
+            sp = Path(str(p)).expanduser()
+            return str(sp) if detail else sp.name
+
+        def _maybe_url(u: str) -> str:
+            if not u or detail:
+                return str(u or "")
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(str(u))
+                return f"{parsed.scheme}://{parsed.hostname or ''}" if parsed.scheme else ""
+            except Exception:
+                return ""
+
+        persist_raw = vec.get("persist_dir", "./db")
+        persist = (ROOT / persist_raw) if not Path(persist_raw).is_absolute() else Path(persist_raw)
         return {
-            "bookmarks_dir": str(svc.dir),
+            "bookmarks_dir": _maybe_path(svc.dir),
             "vector_db": {
                 "type":        vec.get("type", "chromadb"),
-                "persist_dir": str((ROOT / vec.get("persist_dir", "./db"))
-                                   .resolve()) if not Path(vec.get("persist_dir", "./db")).is_absolute()
-                                   else str(Path(vec.get("persist_dir", "./db")).resolve()),
+                "persist_dir": _maybe_path(persist.resolve()),
                 "collection":  vec.get("collection", "bookmarks"),
                 "enabled":     vec_enabled,
                 "installed":   vec_installed,
@@ -590,23 +755,36 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             "llm": {
                 "provider":  llm.get("provider", ""),
                 "model":     llm.get("model", ""),
-                "base_url":  llm.get("base_url", ""),
+                "base_url":  _maybe_url(llm.get("base_url", "")),
                 "n_results": int(llm.get("n_results", 5) or 5),
             },
             "web": {
                 "host": web_cfg.get("host", "127.0.0.1"),
-                "port": int(web_cfg.get("port", 1000)),
+                "port": int(web_cfg.get("port", 8765)),
+                "favicon_provider": str(web_cfg.get("favicon_provider", "none")),
             },
             "logs": {
-                "file": str(log_path) if log_path else "",
-                "dir":  str(log_path.parent) if log_path else "",
+                "file": _maybe_path(log_path),
+                "dir":  _maybe_path(log_path.parent) if log_path else "",
             },
         }
 
+    # Cache /api/plugins for ~30 s to bound the cost of a polling client.
+    # Each call instantiates every source plugin and runs is_available()
+    # — which can do real work (read disk, contact an API). Without the
+    # cache, a malicious page (or a hot-loaded developer dashboard) hammers
+    # them at request rate. (P3-04)
+    _plugins_cache: dict[str, Any] = {"value": None, "expires": 0.0}
+    _plugins_cache_ttl = 30.0
+
     @app.get("/api/plugins")
-    def plugins_list():
+    def plugins_list(refresh: bool = False):
         """Enumerate registered plugins for the Manage-tab plugin admin."""
         from plugins.base import iter_tabs as _iter_tabs
+
+        now = time.monotonic()
+        if not refresh and _plugins_cache["value"] is not None and now < _plugins_cache["expires"]:
+            return _plugins_cache["value"]
 
         sources = []
         for name, cls in iter_registered():
@@ -643,11 +821,14 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             "module": c.module,
         } for _tid, c in _iter_tabs()]
 
-        return {
+        result = {
             "sources":   sources,
             "enrichers": enrichers,
             "tabs":      tabs,
         }
+        _plugins_cache["value"] = result
+        _plugins_cache["expires"] = now + _plugins_cache_ttl
+        return result
 
     @app.get("/api/logs")
     def list_logs():
@@ -715,10 +896,14 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         }
 
     @app.get("/api/status")
-    def status():
-        """System status — installed packages, tools, services."""
+    def status(detail: bool = False):
+        """System status — installed packages, tools, services.
+
+        `?detail=true` runs the `--version` probe per binary (P3-05).
+        Default off so a casual hit doesn't fork shell commands.
+        """
         from . import system_status
-        return system_status.collect(cfg)
+        return system_status.collect(cfg, deep=detail)
 
     @app.get("/api/schema")
     def schema():
@@ -976,18 +1161,27 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
 
     exclude_filter = ExcludeFilter.from_cfg(cfg)
 
+    _security_cfg = (cfg.get("security", {}) or {})
+    _allow_internal = bool(_security_cfg.get("allow_internal_targets", False))
+
     @app.post("/api/link", response_model=LinkAddResponse)
     def add_link(req: LinkAddRequest):
         try:
             path, is_new, title = sync_link(
                 req.url, svc.store, title=req.title, exclude=exclude_filter,
+                allow_internal_targets=_allow_internal,
             )
         except LinkExcluded as e:
             raise HTTPException(409, f"Excluded — {e.reason}")
         except ValueError as e:
             raise HTTPException(400, str(e))
-        except Exception as e:
-            raise HTTPException(500, f"{type(e).__name__}: {e}")
+        except Exception:
+            # Don't echo internal exception text to the client — it's
+            # the most common path for filesystem layout / auth-layer
+            # detail to leak. The full traceback is in the server log.
+            # (P1-08)
+            log.exception("api_link_failed", extra={"url": req.url[:200]})
+            raise HTTPException(500, "Failed to add link — see server logs.")
         svc.refresh(force=True)
         fm = svc.store.read_frontmatter(path)
         return LinkAddResponse(id=bm_id(fm), url=str(fm.get("url", "")),
@@ -1018,9 +1212,13 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         try:
             hits = vector_search(q.query, cfg, q.n, q.min_importance)
         except SystemExit as e:
+            # SystemExit messages here are pre-canned, user-facing strings
+            # (e.g. "Collection not found — run: booki ingest") so it's
+            # safe to pass them through.
             raise HTTPException(400, str(e))
-        except Exception as e:
-            raise HTTPException(500, f"Vector search failed: {e}")
+        except Exception:
+            log.exception("ask_vector_search_failed")
+            raise HTTPException(500, "Vector search failed — see server logs.")
 
         llm_cfg = cfg.get("llm", {})
         result = AskResult(
@@ -1034,8 +1232,10 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
 
         try:
             result.answer = ask_llm(build_prompt(q.query, hits), llm_cfg)
-        except Exception as e:
-            raise HTTPException(502, f"LLM call failed: {e}")
+        except Exception:
+            log.exception("ask_llm_failed",
+                          extra={"provider": str(llm_cfg.get("provider", ""))})
+            raise HTTPException(502, "LLM call failed — see server logs.")
         return result
 
     # ── export system ────────────────────────────────────────────────────────
@@ -1106,7 +1306,7 @@ def main() -> None:
     cfg = load_config(args.config)
     web_cfg = cfg.get("web", {})
     host = args.host or web_cfg.get("host", "127.0.0.1")
-    port = args.port or int(web_cfg.get("port", 1000))
+    port = args.port or int(web_cfg.get("port", 8765))
 
     import uvicorn
     # log_config=None tells uvicorn not to install its own handlers — our

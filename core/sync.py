@@ -30,6 +30,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -122,6 +123,11 @@ MANUAL_PATH = ["manual"]
 _MAX_TITLE_FETCH_BYTES = 2 * 1024 * 1024   # 2 MB — titles live in <head>
 _MAX_FETCH_REDIRECTS = 5
 
+# Concurrency cap on outbound fetches initiated by request handlers.
+# Without this, a flood of concurrent /api/link calls multiplies into a
+# matching number of socket+title-buffer holders. (P2-05)
+_FETCH_CONCURRENCY = threading.Semaphore(4)
+
 
 def _safe_get(url: str, *, timeout: int, headers: dict,
               max_bytes: int) -> Optional[requests.Response]:
@@ -132,47 +138,65 @@ def _safe_get(url: str, *, timeout: int, headers: dict,
     `allow_redirects=True`: the underlying urllib3 retry happens via DNS
     a second time and re-resolution can land on a blocked IP without us
     noticing. Manual redirects let us re-run `is_externally_fetchable_url`
-    on every hop (DNS-rebinding-style attacks become impossible).
+    on every hop, and the IP is pinned across the validation/connect
+    pair so a DNS-rebinding race is impossible. (P2-01)
     """
-    from .url_safety import is_externally_fetchable_url
+    from urllib.parse import urlparse
+    from .url_safety import is_externally_fetchable_url, resolve_safe_ip, pinned_dns
 
-    current = url
-    for _ in range(_MAX_FETCH_REDIRECTS + 1):
-        if not is_externally_fetchable_url(current):
-            return None
-        try:
-            r = requests.get(current, timeout=timeout, allow_redirects=False,
-                             stream=True, headers=headers)
-        except requests.RequestException:
-            return None
-        if r.is_redirect or r.is_permanent_redirect:
-            loc = r.headers.get("Location") or ""
-            r.close()
-            if not loc:
+    # Per-call concurrency gate. The semaphore is process-wide so a
+    # request-handler thread pool can't open more than _FETCH_CONCURRENCY
+    # outbound connections simultaneously. (P2-05)
+    if not _FETCH_CONCURRENCY.acquire(timeout=timeout):
+        return None
+    try:
+        current = url
+        for _ in range(_MAX_FETCH_REDIRECTS + 1):
+            if not is_externally_fetchable_url(current):
                 return None
-            # Resolve relative redirects against the previous URL.
-            from urllib.parse import urljoin
-            current = urljoin(current, loc)
-            continue
-        # Terminal response — read up to `max_bytes` then drop the rest.
-        try:
-            chunks: list[bytes] = []
-            total = 0
-            for chunk in r.iter_content(chunk_size=8192):
-                if not chunk:
-                    continue
-                chunks.append(chunk)
-                total += len(chunk)
-                if total >= max_bytes:
-                    break
-            r._content = b"".join(chunks)[:max_bytes]
-        except requests.RequestException:
-            r.close()
-            return None
-        finally:
-            r.close()
-        return r
-    return None
+            # Pin the IP so the connect() goes to the same address we just
+            # validated. Without this, getaddrinfo runs again inside
+            # requests.get and can return a different (blocked) IP. (P2-01)
+            host = (urlparse(current).hostname or "").lower()
+            ip = resolve_safe_ip(host) if host else None
+            if ip is None:
+                return None
+            try:
+                with pinned_dns(host, ip):
+                    r = requests.get(current, timeout=timeout, allow_redirects=False,
+                                     stream=True, headers=headers)
+            except requests.RequestException:
+                return None
+            if r.is_redirect or r.is_permanent_redirect:
+                loc = r.headers.get("Location") or ""
+                r.close()
+                if not loc:
+                    return None
+                # Resolve relative redirects against the previous URL.
+                from urllib.parse import urljoin
+                current = urljoin(current, loc)
+                continue
+            # Terminal response — read up to `max_bytes` then drop the rest.
+            try:
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in r.iter_content(chunk_size=8192):
+                    if not chunk:
+                        continue
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total >= max_bytes:
+                        break
+                r._content = b"".join(chunks)[:max_bytes]
+            except requests.RequestException:
+                r.close()
+                return None
+            finally:
+                r.close()
+            return r
+        return None
+    finally:
+        _FETCH_CONCURRENCY.release()
 
 
 def _fetch_page_title(url: str, timeout: int = 5) -> str:
@@ -230,15 +254,22 @@ class LinkExcluded(ValueError):
 
 def sync_link(url: str, store: ItemStore, title: Optional[str] = None,
               *, dry_run: bool = False,
-              exclude: Optional[ExcludeFilter] = None) -> tuple[Path, bool, str]:
+              exclude: Optional[ExcludeFilter] = None,
+              allow_internal_targets: bool = False) -> tuple[Path, bool, str]:
     """
     Write a single manually-supplied link as a bookmark MD file.
 
     Returns (path, is_new, resolved_title). No enrichment, no dead-link check.
     Raises LinkExcluded if `exclude` matches the URL.
+
+    `allow_internal_targets`: when False (default), URLs pointing at
+    private / loopback / link-local / IMDS addresses are rejected — see
+    P2-02 in docs/security-audit.md. Users who legitimately bookmark
+    intranet pages set `[security].allow_internal_targets = true` in
+    config; the web layer plumbs that into here.
     """
     from plugins.base import Item
-    from .url_safety import is_safe_url
+    from .url_safety import is_safe_url, is_externally_fetchable_url
 
     url = url.strip()
     if not url:
@@ -253,6 +284,21 @@ def sync_link(url: str, store: ItemStore, title: Optional[str] = None,
         raise ValueError(f"unsupported URL scheme: {scheme_m.group(1)}:")
     if not re.match(r"^[a-zA-Z][a-zA-Z0-9+\-.]*://", url):
         url = "https://" + url
+
+    # Refuse to persist URLs that point at private / loopback / IMDS
+    # targets — once persisted, the title fetch and a later enrich/sync
+    # job will dereference them. file:// is checked separately by the
+    # local-file proxy. (P2-02)
+    if (
+        not allow_internal_targets
+        and url.startswith(("http://", "https://"))
+        and not is_externally_fetchable_url(url)
+    ):
+        raise ValueError(
+            "URL points at a private / loopback / link-local address — "
+            "refusing to add. Set [security].allow_internal_targets = true "
+            "if this is intentional."
+        )
 
     if exclude is not None:
         reason = exclude.match(url)
@@ -297,11 +343,12 @@ class SyncStats:
 # ─── Dead Link Checker ────────────────────────────────────────────────────────
 
 class DeadLinkChecker:
+    # Polite User-Agent — we identify ourselves as Booki rather than
+    # masquerading as Chrome. A hostile site can still serve us bytes
+    # but at least the upstream operator can audit who's hitting them.
+    # (P2-06)
     HEADERS = {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
+        "User-Agent": "booki/1.0 dead-link-checker (+https://github.com/barakbl/booki)",
     }
 
     def __init__(self, timeout: int = REQUEST_TIMEOUT):
@@ -315,29 +362,37 @@ class DeadLinkChecker:
         # IMDS targets. A hostile source plugin or imported bookmark
         # file would otherwise turn `--check-dead-links` into a LAN
         # port-scanner with results visible in stats and logs.
-        from .url_safety import is_externally_fetchable_url
+        # We additionally pin the resolved IP so the actual request
+        # goes to the address we validated. (P2-01)
+        from urllib.parse import urlparse
+        from .url_safety import is_externally_fetchable_url, resolve_safe_ip, pinned_dns
         if not is_externally_fetchable_url(url):
             return "dead"
+        host = (urlparse(url).hostname or "").lower()
+        ip = resolve_safe_ip(host) if host else None
+        if ip is None:
+            return "dead"
         try:
-            r = self.session.head(url, timeout=self.timeout, allow_redirects=False)
-            if r.is_redirect or r.is_permanent_redirect:
-                # Recurse on the redirect target so each hop is re-gated.
-                loc = r.headers.get("Location") or ""
-                if not loc:
-                    return "dead"
-                from urllib.parse import urljoin
-                return self.check(urljoin(url, loc))
-            if r.status_code < 400:
-                return "alive"
-            r = self.session.get(url, timeout=self.timeout, allow_redirects=False, stream=True)
-            r.close()
-            if r.is_redirect or r.is_permanent_redirect:
-                loc = r.headers.get("Location") or ""
-                if not loc:
-                    return "dead"
-                from urllib.parse import urljoin
-                return self.check(urljoin(url, loc))
-            return "alive" if r.status_code < 400 else "dead"
+            with pinned_dns(host, ip):
+                r = self.session.head(url, timeout=self.timeout, allow_redirects=False)
+                if r.is_redirect or r.is_permanent_redirect:
+                    # Recurse on the redirect target so each hop is re-gated.
+                    loc = r.headers.get("Location") or ""
+                    if not loc:
+                        return "dead"
+                    from urllib.parse import urljoin
+                    return self.check(urljoin(url, loc))
+                if r.status_code < 400:
+                    return "alive"
+                r = self.session.get(url, timeout=self.timeout, allow_redirects=False, stream=True)
+                r.close()
+                if r.is_redirect or r.is_permanent_redirect:
+                    loc = r.headers.get("Location") or ""
+                    if not loc:
+                        return "dead"
+                    from urllib.parse import urljoin
+                    return self.check(urljoin(url, loc))
+                return "alive" if r.status_code < 400 else "dead"
         except Exception:
             return "dead"
 
@@ -692,6 +747,17 @@ class Enricher:
             import trafilatura
         except ImportError:
             sys.exit("Install trafilatura:  pip install trafilatura")
+
+        # Re-gate at enrich time. Older bookmarks predate the /api/link
+        # SSRF gate added in P2-02, and source plugins write URLs
+        # without the gate at all. trafilatura.fetch_url has no
+        # awareness of our allow-list, so a stored
+        # `http://192.168.1.1/admin` would otherwise get GET'd here.
+        # (P2-03)
+        from .url_safety import is_externally_fetchable_url
+        if not is_externally_fetchable_url(url):
+            log.debug("enrich_blocked_unsafe_target", extra={"url": url})
+            return "", "title-only", {}
 
         t0 = time.monotonic()
         downloaded = trafilatura.fetch_url(url)

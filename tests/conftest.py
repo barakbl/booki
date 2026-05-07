@@ -151,6 +151,11 @@ dir = "{config_path.parent / 'downloads'}"
 [web]
 host = "127.0.0.1"
 port = 8000
+
+# Tests run hermetic — `is_externally_fetchable_url("https://example.com")`
+# would otherwise trip on missing DNS and reject every test URL.
+[security]
+allow_internal_targets = true
 """,
         encoding="utf-8",
     )

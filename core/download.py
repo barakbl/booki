@@ -108,6 +108,17 @@ def download_one(url_or_id: str, dl_cfg: DownloadConfig, *,
         return DownloadResult(ok=False, error="yt-dlp not installed: pip install yt-dlp")
 
     url = normalize_video_url(url_or_id)
+
+    # SSRF gate: yt-dlp will follow embeds and redirects, and many of
+    # its extractors hit arbitrary URLs. Refuse to feed it
+    # private/loopback/IMDS targets so a marked-as-video bookmark for
+    # `http://192.168.1.1/admin` doesn't turn into a LAN probe. (P2-04)
+    from .url_safety import is_externally_fetchable_url
+    if not is_externally_fetchable_url(url):
+        return DownloadResult(
+            ok=False,
+            error="Refusing to download — URL points at a private / loopback target.",
+        )
     dl_cfg.dir.mkdir(parents=True, exist_ok=True)
     # %(uploader)s groups by channel; %(title).200B trims titles with unicode safety.
     outtmpl = str(dl_cfg.dir / "%(uploader)s" / "%(title).200B [%(id)s].%(ext)s")

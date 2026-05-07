@@ -164,12 +164,16 @@ def _check_python_pkg(entry: tuple, pm: str) -> CheckResult:
     )
 
 
-def _check_binary(entry: tuple, pm: str) -> CheckResult:
+def _check_binary(entry: tuple, pm: str, *, deep: bool = False) -> CheckResult:
     cid, label, binary, feature, required, install, docs = entry
     path = shutil.which(binary)
     ok = bool(path)
     detail = path or "not found on PATH"
-    if ok:
+    if ok and deep:
+        # Probe `--version` only when the caller explicitly opted in
+        # (via /api/status?detail=true). The path resolves through $PATH
+        # so a poisoned earlier-shadowing shim would otherwise execute on
+        # every status call. (P3-05)
         try:
             out = subprocess.run(
                 [binary, "--version"], capture_output=True, text=True,
@@ -191,10 +195,34 @@ def _check_binary(entry: tuple, pm: str) -> CheckResult:
     )
 
 
-def _check_ollama_service(base_url: str) -> CheckResult:
-    """Soft check: only run if the user actually selected ollama."""
+def _check_ollama_service(base_url: str, *, allow_arbitrary: bool = False) -> CheckResult:
+    """Soft check: only run if the user actually selected ollama.
+
+    `base_url` comes from config. We only ping it when the host is
+    `localhost` / `127.0.0.1` / `[::1]` — the canonical Ollama default.
+    Anything else requires the user to opt in by setting
+    `[llm].allow_arbitrary_base_url = true`. This stops a tampered
+    config (or a casual misconfiguration) from turning every
+    /api/status hit into a server-side request to an arbitrary URL.
+    (P3-03)
+    """
+    from urllib.parse import urlparse
     ok = False
     detail = "not reached"
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or "").lower()
+    is_loopback = host in ("localhost", "127.0.0.1", "::1", "")
+    if not (is_loopback or allow_arbitrary):
+        return CheckResult(
+            id="svc-ollama", category="Services",
+            label=f"Ollama daemon ({base_url})",
+            feature="Local LLM responses for Ask",
+            required=False, ok=False,
+            detail=("not probed — base_url is non-loopback. Set "
+                    "[llm].allow_arbitrary_base_url = true to enable."),
+            install={"shell": "ollama serve"},
+            fix_command=None, docs_url="https://github.com/ollama/ollama",
+        )
     try:
         import urllib.request, urllib.error
         url = base_url.rstrip("/") + "/api/tags"
@@ -222,7 +250,9 @@ def _check_ollama_service(base_url: str) -> CheckResult:
 def _check_env_var(name: str, feature: str, required: bool = False) -> CheckResult:
     val = os.environ.get(name, "")
     ok = bool(val)
-    detail = f"set ({len(val)} chars)" if ok else "not set"
+    # Don't disclose the key length — it's a (weak) prefilter on key
+    # types and serves no diagnostic purpose. (P3-06)
+    detail = "set" if ok else "not set"
     return CheckResult(
         id=f"env-{name.lower()}", category="Environment",
         label=name, feature=feature, required=required, ok=ok,
@@ -234,8 +264,13 @@ def _check_env_var(name: str, feature: str, required: bool = False) -> CheckResu
 
 # ─── Public entrypoint ────────────────────────────────────────────────────────
 
-def collect(cfg: Optional[dict] = None) -> dict:
-    """Run every check and return a JSON-friendly payload for /api/status."""
+def collect(cfg: Optional[dict] = None, *, deep: bool = False) -> dict:
+    """Run every check and return a JSON-friendly payload for /api/status.
+
+    `deep=True` runs the `--version` probe on each detected binary
+    (P3-05). Off by default — kept off the default response shape so
+    a casual /api/status hit doesn't shell out for every binary.
+    """
     cfg = cfg or {}
     pm = _detect_pm()
     results: list[CheckResult] = []
@@ -243,13 +278,16 @@ def collect(cfg: Optional[dict] = None) -> dict:
     for entry in PYTHON_PACKAGES:
         results.append(_check_python_pkg(entry, pm))
     for entry in BINARIES:
-        results.append(_check_binary(entry, pm))
+        results.append(_check_binary(entry, pm, deep=deep))
 
     # Conditional / config-aware checks
     llm_provider = str((cfg.get("llm") or {}).get("provider") or "").lower()
     base_url = str((cfg.get("llm") or {}).get("base_url") or "http://localhost:11434")
     if llm_provider == "ollama":
-        results.append(_check_ollama_service(base_url))
+        allow_arbitrary = bool(
+            (cfg.get("llm") or {}).get("allow_arbitrary_base_url", False)
+        )
+        results.append(_check_ollama_service(base_url, allow_arbitrary=allow_arbitrary))
     if llm_provider == "claude":
         results.append(_check_env_var("ANTHROPIC_API_KEY",
                                       "Required by llm.provider = 'claude'", True))

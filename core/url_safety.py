@@ -26,8 +26,11 @@ that explicitly opt in, and never followed by `requests.get`.
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import socket
+import threading
+from typing import Iterator, Optional
 from urllib.parse import urlparse
 
 
@@ -97,6 +100,89 @@ def _is_blocked_ip(ip: ipaddress._BaseAddress) -> bool:
         or ip.is_unspecified
         or ip.is_reserved
     )
+
+
+def resolve_safe_ip(host: str) -> Optional[str]:
+    """Resolve `host` and return one routable IP, or None.
+
+    Returns the first address in the getaddrinfo result that is NOT in a
+    blocked range. If *any* address is in a blocked range, we return None
+    (fail-closed). Used by `pinned_dns` so the request that follows
+    cannot land on a different IP than the one we validated.
+
+    (P2-01 — defeats DNS rebinding by ensuring the connect() goes to the
+    same IP getaddrinfo returned at validation time.)
+    """
+    try:
+        ip = ipaddress.ip_address(host)
+        return None if _is_blocked_ip(ip) else str(ip)
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (socket.gaierror, UnicodeError, OSError):
+        return None
+    chosen: Optional[str] = None
+    for fam, _t, _p, _c, sockaddr in infos:
+        addr = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(addr.split("%", 1)[0])
+        except ValueError:
+            return None
+        if _is_blocked_ip(ip):
+            return None
+        if chosen is None:
+            chosen = str(ip)
+    return chosen
+
+
+_DNS_PIN_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def pinned_dns(host: str, ip: str) -> Iterator[None]:
+    """Pin DNS resolution of `host` to `ip` for the duration of the block.
+
+    Why: `is_externally_fetchable_url(url)` resolves the host once and
+    classifies the IP, but `requests.get(url, …)` immediately re-resolves.
+    A DNS server controlled by an attacker can return a public IP to the
+    first lookup (passes the gate) and a loopback IP to the second
+    (the actual fetch). This context manager monkey-patches
+    `socket.getaddrinfo` so any resolution of `host` returns only the
+    pre-validated `ip` — the second lookup can't land elsewhere.
+
+    Thread-safe: serialises through `_DNS_PIN_LOCK` because monkey-patching
+    `socket.getaddrinfo` is process-global and FastAPI runs sync handlers
+    on a thread pool. The patched window is short (one HTTP request).
+    """
+    target_host = host.lower()
+    fam = socket.AF_INET6 if ":" in ip else socket.AF_INET
+
+    with _DNS_PIN_LOCK:
+        original = socket.getaddrinfo
+
+        def patched(host_, *args, **kwargs):
+            if isinstance(host_, str) and host_.lower() == target_host:
+                # Match getaddrinfo's return shape: a list of 5-tuples
+                # (family, type, proto, canonname, sockaddr).
+                port = args[0] if args else kwargs.get("port") or 0
+                if isinstance(port, str):
+                    try:
+                        port = int(port)
+                    except ValueError:
+                        port = 0
+                if fam == socket.AF_INET6:
+                    sockaddr = (ip, port, 0, 0)
+                else:
+                    sockaddr = (ip, port)
+                return [(fam, socket.SOCK_STREAM, 0, "", sockaddr)]
+            return original(host_, *args, **kwargs)
+
+        socket.getaddrinfo = patched
+        try:
+            yield
+        finally:
+            socket.getaddrinfo = original
 
 
 def is_externally_fetchable_url(url: str) -> bool:

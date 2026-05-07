@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Reuse YAML helpers + frontmatter regex + ISO timestamp helper from the
 # exporter task store so we don't duplicate them.
@@ -123,16 +123,31 @@ class Job:
         return d
 
 
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
 class JobStore:
     """File-backed store under `<exports_root>/jobs/`. Thread-safe."""
 
     def __init__(self, dir_: Path):
         self.dir = dir_
         self.dir.mkdir(parents=True, exist_ok=True)
+        self._dir_resolved = self.dir.resolve()
         self._lock = threading.Lock()
 
     def _path(self, jid: str) -> Path:
-        return self.dir / f"{jid}.md"
+        # Same path-traversal guard as TaskStore (P1-01). `jid` reaches us
+        # from /api/jobs/{jid} unvalidated; without the regex + relative_to
+        # check, a jid like `../../etc/hosts` lets `_read` open arbitrary
+        # `.md` files and `delete` unlink them.
+        if not _JOB_ID_RE.match(jid or ""):
+            return self.dir / f"{uuid.uuid4().hex}__invalid.md"
+        p = self.dir / f"{jid}.md"
+        try:
+            p.resolve().relative_to(self._dir_resolved)
+        except (ValueError, OSError):
+            return self.dir / f"{uuid.uuid4().hex}__invalid.md"
+        return p
 
     def list(self) -> list[Job]:
         out: list[Job] = []
@@ -310,8 +325,15 @@ class JobRunner:
 # ─── FastAPI wiring ─────────────────────────────────────────────────────────
 
 class JobRunRequest(BaseModel):
-    kind: str
-    args: list[str] = Field(default_factory=list)
+    # Bound the request shape so the validator can't be hit with a
+    # multi-MB args list before _sanitize_args runs. (P1-06)
+    kind: str = Field(min_length=1, max_length=32)
+    args: list[str] = Field(default_factory=list, max_length=64)
+
+    @field_validator("args")
+    @classmethod
+    def _cap_arg_strings(cls, v: list[str]) -> list[str]:
+        return [str(x)[:512] for x in v]
 
 
 def attach_routes(app: FastAPI, exports_root: Path, project_root: Path) -> None:

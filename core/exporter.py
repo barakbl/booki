@@ -186,8 +186,22 @@ def list_themes(kind: str, themes_root: Path) -> list[Theme]:
     return [Theme.from_dir(kind, d) for d in sorted(base.iterdir()) if d.is_dir()]
 
 
+_THEME_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
 def get_theme(kind: str, slug: str, themes_root: Path) -> Optional[Theme]:
-    p = _themes_dir(kind, themes_root) / slug
+    # Block path-traversal via slug. Without this guard,
+    # `slug = "../../../etc"` makes `p` resolve outside themes_root,
+    # and the `/themes/{kind}/{slug}/thumbnail` endpoint becomes a
+    # read primitive for any file named thumbnail.png. (P1-02)
+    if not _THEME_SLUG_RE.match(slug or ""):
+        return None
+    base = _themes_dir(kind, themes_root).resolve()
+    p = (base / slug).resolve()
+    try:
+        p.relative_to(base)
+    except (ValueError, OSError):
+        return None
     if not p.is_dir():
         return None
     return Theme.from_dir(kind, p)
@@ -433,6 +447,40 @@ def _yaml_dump_flat(d: dict) -> str:
     return "\n".join(lines)
 
 
+def _content_disposition(filename: str, *, fallback: str = "export.bin") -> str:
+    """Build a safe `Content-Disposition: attachment; …` header value.
+
+    `filename` comes from an Exporter plugin — without escaping, a name
+    containing CR / LF / NUL / `"` lets a hostile or buggy plugin inject
+    additional response headers (CRLF) or a second `filename` parameter
+    that overrides this one. We therefore:
+      1. Strip control chars, NUL, CR, LF.
+      2. Drop path separators (these have no business in a download
+         filename and confuse certain clients).
+      3. Build both `filename="ASCII-only fallback"` (RFC 2616) and
+         `filename*=UTF-8''<percent-encoded>` (RFC 6266) so unicode
+         names round-trip on every modern browser.
+
+    (P1-03)
+    """
+    from urllib.parse import quote
+
+    raw = str(filename or "").strip()
+    raw = "".join(c for c in raw if c not in ("\r", "\n", "\x00")
+                  and ord(c) >= 0x20)
+    raw = raw.replace("/", "_").replace("\\", "_")
+    if not raw:
+        raw = fallback
+
+    ascii_safe = "".join(c if 32 <= ord(c) < 127 and c not in ('"', "\\")
+                         else "_" for c in raw)
+    if not ascii_safe.strip("_"):
+        ascii_safe = fallback
+
+    encoded = quote(raw, safe="")
+    return f'attachment; filename="{ascii_safe}"; filename*=UTF-8\'\'{encoded}'
+
+
 def _yaml_load_flat(text: str) -> dict:
     out: dict = {}
     for line in text.splitlines():
@@ -516,16 +564,39 @@ class Task:
         return d
 
 
+_TASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _validate_task_id(task_id: str) -> None:
+    """Reject any task id that could escape the tasks dir or smuggle a
+    null byte through `Path` joining. The route signature also enforces
+    the regex via Pydantic validators where it can; this is the load-
+    bearing guard for path-traversal — `Path(self.dir) / f"{tid}.md"`
+    would otherwise happily resolve to `../../etc/hosts.md`. (P1-01)"""
+    if not _TASK_ID_RE.match(task_id or ""):
+        raise HTTPException(404, "task not found")
+
+
 class TaskStore:
     """Reads / writes task .md files. Thread-safe via a lock per file write."""
 
     def __init__(self, tasks_dir: Path):
         self.dir = tasks_dir
         self.dir.mkdir(parents=True, exist_ok=True)
+        self._dir_resolved = self.dir.resolve()
         self._lock = threading.Lock()
 
     def _path(self, task_id: str) -> Path:
-        return self.dir / f"{task_id}.md"
+        _validate_task_id(task_id)
+        p = self.dir / f"{task_id}.md"
+        # Defense-in-depth: even with the regex guard, assert the resolved
+        # path stays inside `dir`. Any future tweak to the validator can't
+        # reintroduce traversal without also breaking this check.
+        try:
+            p.resolve().relative_to(self._dir_resolved)
+        except (ValueError, OSError):
+            raise HTTPException(404, "task not found")
+        return p
 
     def list(self) -> list[Task]:
         if not self.dir.is_dir():
@@ -950,10 +1021,12 @@ def attach_routes(app: FastAPI, cfg: dict, config_path: Path, svc) -> None:
             raise HTTPException(400, "No items resolved from item_ids")
         try:
             return inst.preview(items, req.options, theme, theme_vars, tree=req.tree)
-        except Exception as e:
+        except Exception:
+            # Don't surface raw exception text — it can include
+            # filesystem paths and partial frontmatter. (P1-08)
             log.exception("preview_failed",
                           extra={"exporter": req.exporter, "item_count": len(items)})
-            raise HTTPException(500, f"Preview failed: {type(e).__name__}: {e}")
+            raise HTTPException(500, "Preview failed — see server logs.")
 
     # ── Run ─────────────────────────────────────────────────────────────
 
@@ -983,10 +1056,11 @@ def attach_routes(app: FastAPI, cfg: dict, config_path: Path, svc) -> None:
             try:
                 data, filename, mime = inst.run_immediate(
                     items, req.options, theme, theme_vars, tree=req.tree)
-            except Exception as e:
+            except Exception:
+                # See P1-08 — generic message to client, full traceback to log.
                 log.exception("immediate_export_failed",
                               extra={"exporter": req.exporter, "item_count": len(items)})
-                raise HTTPException(500, f"Export failed: {type(e).__name__}: {e}")
+                raise HTTPException(500, "Export failed — see server logs.")
             log.info("immediate_export_ok",
                      extra={"exporter": req.exporter, "item_count": len(items),
                             "duration_s": round(time.monotonic() - t0, 3),
@@ -994,7 +1068,7 @@ def attach_routes(app: FastAPI, cfg: dict, config_path: Path, svc) -> None:
             return Response(
                 content=data,
                 media_type=mime,
-                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                headers={"Content-Disposition": _content_disposition(filename)},
             )
 
         # background
