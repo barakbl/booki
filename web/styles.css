@@ -1822,6 +1822,38 @@ mark.hl {
   line-height: 1.55;
 }
 
+/* Poster (above Summary). Sized to the drawer width with the same rounded
+   corners as the rest of the drawer. The thumbnail is routed through the
+   same-origin /api/video-thumbnail proxy so the page CSP doesn't block
+   external CDN hosts. */
+.detail-poster-section {
+  border-top: none;
+  padding-top: 0;
+  margin-bottom: 16px;
+}
+.detail-poster-link {
+  display: block;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #000;
+  border: 1px solid var(--border);
+  transition: border-color 0.12s, transform 0.12s;
+}
+.detail-poster-link:hover {
+  border-color: var(--accent);
+}
+.detail-poster-link.disabled {
+  pointer-events: none;
+}
+.detail-poster {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: #0a0a14;
+}
+
 .tag-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag-list .tag {
   background: var(--panel-2);

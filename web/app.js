@@ -126,6 +126,9 @@ const els = {
   detailLastenriched: $("detailLastenriched"),
   detailArchive: $("detailArchive"),
   detailFile: $("detailFile"),
+  secVideoPoster: $("secVideoPoster"),
+  detailVideoPoster: $("detailVideoPoster"),
+  detailVideoPosterLink: $("detailVideoPosterLink"),
   secSummary: $("secSummary"),
   secNotes: $("secNotes"),
   secTags: $("secTags"),
@@ -1585,6 +1588,7 @@ async function openDetail(id) {
   els.detailPath.textContent = d.browser_path || "—";
   els.detailPath.className = "chip";
 
+  renderVideoPoster(d);
   renderExtras(d);
 
   toggleSection(els.secSummary, d.summary, () => els.detailSummary.textContent = d.summary);
@@ -1749,9 +1753,58 @@ function formatValue(v, spec) {
   }
 }
 
+// Drawer poster (above the Summary). For now we only render it for items
+// that look like videos — anything with `extras.youtube_thumbnail` or a
+// generic `poster` field. The image is routed through the same-origin
+// `/api/video-thumbnail` proxy so the page CSP (`img-src 'self' data:`)
+// doesn't block external CDN hosts. Returns the thumbnail URL we used so
+// `renderExtras` can suppress it (avoiding a duplicate tile in Extras).
+function _videoPosterFieldsFor(d) {
+  const e = d.extras || {};
+  // Order matters — first one wins, so plugin authors can override by
+  // populating `poster` (a generic field) over `youtube_thumbnail`.
+  const candidates = ["poster", "youtube_thumbnail"];
+  for (const k of candidates) {
+    if (e[k] && typeof e[k] === "string") return { key: k, url: String(e[k]) };
+  }
+  return null;
+}
+
+function renderVideoPoster(d) {
+  const found = _videoPosterFieldsFor(d);
+  if (!found) {
+    els.secVideoPoster.classList.add("hidden");
+    els.detailVideoPoster.removeAttribute("src");
+    return;
+  }
+  const proxied = videoThumbSrcFor(found.url);
+  els.detailVideoPoster.src = proxied;
+  els.detailVideoPoster.alt = d.title ? `Poster for ${d.title}` : "Video poster";
+  // Click the poster to open the video itself in a new tab — same target
+  // as the "Open ↗" button, so the poster reads as a "play"-style affordance.
+  const safe = safeHref(d.url);
+  els.detailVideoPosterLink.href = safe || "#";
+  els.detailVideoPosterLink.classList.toggle("disabled", !safe);
+  // If the proxy / source 404s, hide the section instead of leaving a
+  // broken-image icon dangling.
+  els.detailVideoPoster.onerror = () => {
+    els.detailVideoPoster.onerror = null;
+    els.secVideoPoster.classList.add("hidden");
+  };
+  els.secVideoPoster.classList.remove("hidden");
+}
+
+// Field names already rendered as the top-of-drawer poster — `renderExtras`
+// skips them so the same image doesn't appear twice (once big up top, once
+// as a tiny tile in the Extras section).
+const _POSTER_EXTRA_KEYS = new Set(["poster", "youtube_thumbnail"]);
+
 function renderExtras(d) {
   const extras = d.extras || {};
   const itemKind = d.kind || "bookmark";
+  // If the poster section claimed a thumbnail field, skip it here.
+  const poster = _videoPosterFieldsFor(d);
+  const skipKey = poster && _POSTER_EXTRA_KEYS.has(poster.key) ? poster.key : null;
 
   // Effective-kinds set: the item's own `kind` plus any `*_kind` hint written
   // by an enricher (e.g. `youtube_kind: "video"` on a kind=bookmark item that
@@ -1788,6 +1841,7 @@ function renderExtras(d) {
   for (const spec of specs) {
     if (spec.kinds && spec.kinds.length
         && !spec.kinds.some(k => effectiveKinds.has(k))) continue;
+    if (skipKey && spec.name === skipKey) continue;
     const raw = extras[spec.name];
     const html = formatValue(raw, spec);
     if (!html) continue;
