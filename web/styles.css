@@ -2227,12 +2227,23 @@ mark.hl {
 
 /* ─── Export drawer ────────────────────────────────────────────────── */
 
-.header-export {
+/* Per-tab export button. Lives inside each `<header class="tab-header">`,
+   right of the view-mode toggle, with a count baked into the label
+   ("Export 220 Videos"). Each tab's render hook re-computes the count
+   from its own filtered DOM, so cross-tab changes never repaint a peer. */
+.tab-export-btn {
   white-space: nowrap;
   font-weight: 600;
   margin-left: 8px;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
-.header-export[disabled] {
+.tab-export-btn .btn-icon {
+  flex: 0 0 auto;
+}
+.tab-export-btn[disabled] {
   opacity: 0.5;
   cursor: not-allowed;
 }

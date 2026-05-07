@@ -73,6 +73,8 @@ booki.tabs.implement("documents", {
             ${btn("list", "≡", "List")}
             ${btn("grid", "▦", "Grid")}
           </div>
+          <button type="button" class="btn tab-export-btn" data-tab-export="documents"
+                  title="Export the documents currently shown" disabled>Export</button>
         </header>
         <div class="search-box scoped-search" id="docSearchBox">
           <span class="search-icon">🔎</span>
@@ -165,6 +167,7 @@ function render(el) {
     count.textContent = "0 documents";
     empty.classList.remove("hidden");
     noMatch.classList.add("hidden");
+    booki.ui?.refreshTabExportButton?.("documents");
     return;
   }
   empty.classList.add("hidden");
@@ -213,6 +216,7 @@ function render(el) {
   if (!scored.length) {
     host.innerHTML = "";
     noMatch.classList.remove("hidden");
+    booki.ui?.refreshTabExportButton?.("documents");
     return;
   }
   noMatch.classList.add("hidden");
@@ -235,9 +239,10 @@ function render(el) {
       }
     });
   });
-  // Tell the host to re-read getSelection() so "⬇ Export N items" updates
-  // as the user types in the filter / switches view.
-  booki.ui?.refreshExportButton?.();
+  // Update the inline `<button data-tab-export="documents">` label with the
+  // count of currently-rendered rows. Strictly per-tab — peer tabs aren't
+  // touched.
+  booki.ui?.refreshTabExportButton?.("documents");
 }
 
 function renderList(rows) {

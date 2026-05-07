@@ -1359,6 +1359,7 @@ function renderResults() {
     els.results.innerHTML = "";
     els.results.className = "results";
     els.empty.classList.remove("hidden");
+    refreshTabExportButton("search");
     return;
   }
   els.empty.classList.add("hidden");
@@ -1367,8 +1368,8 @@ function renderResults() {
   const items = state.filtered.map(r => r.bm);
   const adv = state.advByScope.search;
   els.results.className = "results";
-  if (mode === "grid")  { renderItemsGrid(els.results, items, { adv }); return; }
-  if (mode === "table") { renderItemsTable(els.results, items, { adv }); return; }
+  if (mode === "grid")  { renderItemsGrid(els.results, items, { adv });  refreshTabExportButton("search"); return; }
+  if (mode === "table") { renderItemsTable(els.results, items, { adv }); refreshTabExportButton("search"); return; }
 
   // mode === "list" — keep rich rows with score chips + match highlights.
   const frag = document.createDocumentFragment();
@@ -1376,6 +1377,7 @@ function renderResults() {
     frag.appendChild(renderRow(row, i === state.selected, adv));
   });
   els.results.replaceChildren(frag);
+  refreshTabExportButton("search");
 }
 
 function renderRow(row, selected, adv) {
@@ -2111,10 +2113,12 @@ window.booki.ui = {
   // listener, no per-tab wiring needed.
   rowActionsHtml: (bm) => rowActionsHtml(bm),
   // Plugin tabs that own their results container (and therefore declare
-  // `getSelection`) call this after re-rendering so the topbar's
-  // "⬇ Export N items" label refreshes. Built-in tabs use it implicitly
-  // via the MutationObserver below.
+  // `getSelection`) call this after re-rendering so their inline
+  // `<button data-tab-export="…">` label refreshes with the new count.
+  // The bare `refreshExportButton()` shim is kept for legacy callers and
+  // updates whichever tab is currently active.
   refreshExportButton: () => refreshExportButton(),
+  refreshTabExportButton: (tabId) => refreshTabExportButton(tabId),
 };
 window.booki.search = {
   fuzzy:     (q, text) => fuzzyMatch(q, text),
@@ -2169,6 +2173,8 @@ Tabs.register({
           <h2>🖼 Photos</h2>
           <p class="tab-sub" id="photoCount">—</p>
           ${viewToggleHtml("photos", ["list", "grid", "table"], "grid")}
+          <button type="button" class="btn tab-export-btn" data-tab-export="photos"
+                  title="Export the photos currently shown" disabled>Export</button>
         </header>
         <div class="search-box scoped-search" id="photoSearchBox">
           <span class="search-icon">🔎</span>
@@ -2280,6 +2286,7 @@ function renderPhotoGrid() {
     count.textContent = "0 photos";
     empty.classList.remove("hidden");
     noMatch?.classList.add("hidden");
+    refreshTabExportButton("photos");
     return;
   }
   empty.classList.add("hidden");
@@ -2323,6 +2330,7 @@ function renderPhotoGrid() {
   if (!photos.length) {
     grid.innerHTML = "";
     noMatch?.classList.remove("hidden");
+    refreshTabExportButton("photos");
     return;
   }
   noMatch?.classList.add("hidden");
@@ -2334,10 +2342,12 @@ function renderPhotoGrid() {
   grid.className = "";
   if (mode === "table") {
     renderItemsTable(grid, photos, { adv });
+    refreshTabExportButton("photos");
     return;
   }
   if (mode === "list") {
     renderItemsList(grid, photos, { adv });
+    refreshTabExportButton("photos");
     return;
   }
   // mode === "grid" — keep the existing photo-thumbnail tile grid.
@@ -2385,6 +2395,7 @@ function renderPhotoGrid() {
   }
   grid.innerHTML = "";
   grid.appendChild(frag);
+  refreshTabExportButton("photos");
 }
 
 Tabs.register({
@@ -2396,6 +2407,8 @@ Tabs.register({
           <h2>🎬 Videos</h2>
           <p class="tab-sub" id="videoCount">—</p>
           ${viewToggleHtml("videos", ["list", "grid", "table"], "grid")}
+          <button type="button" class="btn tab-export-btn" data-tab-export="videos"
+                  title="Export the videos currently shown" disabled>Export</button>
         </header>
         <div class="search-box scoped-search" id="videoSearchBox">
           <span class="search-icon">🔎</span>
@@ -2465,6 +2478,7 @@ function renderVideoGrid() {
     count.textContent = "0 videos";
     empty.classList.remove("hidden");
     noMatch?.classList.add("hidden");
+    refreshTabExportButton("videos");
     return;
   }
   empty.classList.add("hidden");
@@ -2496,12 +2510,11 @@ function renderVideoGrid() {
     }
     videos = topSorts
       ? applyAdvSort(scored.map(x => x.bm), adv)
-      : scored.sort((a, b) => b.score - a.score).map(x => x.bm).slice(0, 200);
+      : scored.sort((a, b) => b.score - a.score).map(x => x.bm);
   } else {
     videos = topSorts
       ? applyAdvSort(filtered, adv)
-      : [...filtered].sort((a, b) => (b.importance || 0) - (a.importance || 0))
-                     .slice(0, 200);
+      : [...filtered].sort((a, b) => (b.importance || 0) - (a.importance || 0));
   }
 
   count.textContent = q
@@ -2511,6 +2524,7 @@ function renderVideoGrid() {
   if (!videos.length) {
     grid.innerHTML = "";
     noMatch?.classList.remove("hidden");
+    refreshTabExportButton("videos");
     return;
   }
   noMatch?.classList.add("hidden");
@@ -2519,10 +2533,12 @@ function renderVideoGrid() {
   grid.className = "";
   if (mode === "table") {
     renderItemsTable(grid, videos, { adv });
+    refreshTabExportButton("videos");
     return;
   }
   if (mode === "list") {
     renderItemsList(grid, videos, { adv });
+    refreshTabExportButton("videos");
     return;
   }
   // mode === "grid" — keep existing video-poster grid.
@@ -2578,6 +2594,7 @@ function renderVideoGrid() {
   }
   grid.innerHTML = "";
   grid.appendChild(frag);
+  refreshTabExportButton("videos");
 }
 
 Tabs.register({
@@ -2593,6 +2610,8 @@ Tabs.register({
           <p class="tab-sub">
             Semantic search over your bookmarks, optionally synthesized by an LLM.
           </p>
+          <button type="button" class="btn tab-export-btn" data-tab-export="ask"
+                  title="Export the answer's source bookmarks" disabled>Export</button>
         </header>
       </div>`;
     const root = el.querySelector(".ask-tab");
@@ -3244,7 +3263,10 @@ function _rerenderAskSources() {
   if (!host) return;
   host.className = "results";
   host.innerHTML = "";
-  if (!_askLastResults.length) return;
+  if (!_askLastResults.length) {
+    refreshTabExportButton("ask");
+    return;
+  }
   const frag = document.createDocumentFragment();
   for (const { bm, score } of _askLastResults) {
     frag.appendChild(renderRow(
@@ -3253,6 +3275,7 @@ function _rerenderAskSources() {
     ));
   }
   host.replaceChildren(frag);
+  refreshTabExportButton("ask");
 }
 
 // ─── Add link ──────────────────────────────────────────────────────
@@ -3689,32 +3712,92 @@ function getActiveSelection() {
   return { kind: "any", ids: [] };
 }
 
-function refreshExportButton() {
-  const btn = document.getElementById("openExportBtn");
-  const lbl = document.getElementById("exportBtnLabel");
-  if (!btn || !lbl) return;
-  const sel = getActiveSelection();
-  if (!sel.ids.length) {
-    btn.disabled = true;
-    lbl.textContent = "Export";
-  } else {
-    btn.disabled = false;
-    lbl.textContent = `Export ${sel.ids.length} ${sel.ids.length === 1 ? "item" : "items"}`;
-  }
+// Each tab owns one inline export button (`<button data-tab-export="…">`)
+// that lives inside its own `<header class="tab-header">`. The label is
+// "Export {N} {Tab-Name}" — so the user always sees the exact item count
+// that's about to flow into the wizard. The button mirrors the active
+// fzf / advanced-search filter because the count comes straight from the
+// rendered DOM (`getSelection()` scrapes `data-id` from the visible tiles).
+//
+// `TAB_EXPORT_NAMES` is the only place the human-readable tab noun is
+// declared; render code never builds the label itself.
+const TAB_EXPORT_NAMES = {
+  search:    { singular: "Bookmark", plural: "Bookmarks" },
+  photos:    { singular: "Photo",    plural: "Photos"    },
+  videos:    { singular: "Video",    plural: "Videos"    },
+  documents: { singular: "Document", plural: "Documents" },
+  ask:       { singular: "Source",   plural: "Sources"   },
+};
+
+function _tabExportButton(tabId) {
+  return document.querySelector(`[data-tab-export="${tabId}"]`);
 }
 
-// Re-render the button label whenever results re-render. Tabs already call
-// refreshExportButton() in their onShow; this MutationObserver covers the
-// case where a tab's filter input fires synchronous DOM updates.
-function _observeExportRoots() {
-  const roots = ["#results", "#photoGrid", "#videoGrid", "#askSources", "#docResults"];
-  for (const sel of roots) {
+const EXPORT_ICON_SVG = `<svg class="btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14"/></svg>`;
+
+function setTabExportCount(tabId, count) {
+  const btn = _tabExportButton(tabId);
+  const noun = TAB_EXPORT_NAMES[tabId];
+  if (!btn || !noun) return;
+  const n = Math.max(0, count | 0);
+  btn.disabled = n === 0;
+  const label = n === 0
+    ? `Export ${noun.plural}`
+    : `Export ${n} ${n === 1 ? noun.singular : noun.plural}`;
+  btn.innerHTML = `${EXPORT_ICON_SVG}<span>${escapeHtml(label)}</span>`;
+}
+
+// Compute the count from the tab's own getSelection() — the same data path
+// the wizard uses on click, so the label can never lie.
+function refreshTabExportButton(tabId) {
+  if (!tabId || !TAB_EXPORT_NAMES[tabId]) return;
+  const spec = Tabs.get(tabId);
+  let ids = [];
+  if (spec && typeof spec.getSelection === "function") {
+    try { ids = (spec.getSelection() || {}).ids || []; }
+    catch (e) { console.error(e); }
+  }
+  setTabExportCount(tabId, ids.length);
+}
+
+// Back-compat shim — older callers still poke `refreshExportButton()`. Now
+// it just re-syncs whichever tab is active.
+function refreshExportButton() {
+  refreshTabExportButton(Tabs.current());
+}
+
+// Per-tab MutationObserver: each container's filter/render mutates only
+// that container, so we can scope updates strictly. No more cross-tab
+// repaints when an unrelated grid changes.
+const _TAB_EXPORT_OBSERVED = {
+  search:    "#results",
+  photos:    "#photoGrid",
+  videos:    "#videoGrid",
+  documents: "#docResults",
+  ask:       "#askSources",
+};
+
+function _observeTabExportRoots() {
+  for (const [tabId, sel] of Object.entries(_TAB_EXPORT_OBSERVED)) {
     const node = document.querySelector(sel);
     if (!node) continue;
-    new MutationObserver(refreshExportButton).observe(node, { childList: true });
+    new MutationObserver(() => refreshTabExportButton(tabId))
+      .observe(node, { childList: true });
+    // Initial sync (covers first paint, before any input event).
+    refreshTabExportButton(tabId);
   }
 }
-document.addEventListener("DOMContentLoaded", _observeExportRoots);
+document.addEventListener("DOMContentLoaded", _observeTabExportRoots);
+
+// Single delegated click handler for every per-tab export button.
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-tab-export]");
+  if (!btn || btn.disabled) return;
+  // Open the wizard with whatever the *clicked* tab currently shows. The
+  // tab id is on the button so we can't get fooled by a stale Tabs.current()
+  // (e.g. the user clicked rapidly through tabs).
+  openExport();
+});
 
 function _exportMountTarget() {
   // Prefer the search tab's main-content area (skip the sidebar).
@@ -4937,7 +5020,9 @@ function _onExportStepnav(ev) {
   renderExportStep();
 }
 
-document.getElementById("openExportBtn")?.addEventListener("click", openExport);
+// Per-tab export buttons are wired via delegated click + MutationObserver
+// in the export-wizard section below. The legacy top-bar `#openExportBtn`
+// has been removed; this line is intentionally left as a marker.
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (exportPanelEl) closeExport();

@@ -40,10 +40,6 @@
            autocapitalize="off" autocorrect="off" spellcheck="false">
     <button type="submit" class="btn" id="addLinkBtn" title="Add link">＋</button>
   </form>
-  <button type="button" class="btn header-export" id="openExportBtn"
-          title="Export the items currently shown in this tab" disabled>
-    ⬇ <span id="exportBtnLabel">Export</span>
-  </button>
 </header>
 
 <aside id="libraryHealthBanner" class="lib-banner hidden" role="alert" aria-live="polite" hidden></aside>
@@ -56,6 +52,8 @@
   <h2>🔎 Search</h2>
   <p class="tab-sub" id="searchCount">—</p>
   <div id="searchViewToolbar"></div>
+  <button type="button" class="btn tab-export-btn" data-tab-export="search"
+          title="Export the items currently shown in this tab" disabled>Export</button>
 </header>
 
 <section class="search-wrap">
@@ -258,6 +256,6 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script src="/static/app.js?v=76"></script>
+<script src="/static/app.js?v=78"></script>
 </body>
 </html>
