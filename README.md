@@ -71,18 +71,32 @@ side-by-side and clicks open the full-size asset. GitHub renders this. -->
   <sub><b>web search — videos tab</b></sub>
 </td>
 <td align="center" width="33%">
-  <a href="docs/screen/web%20doctor.png"><img src="docs/screen/web%20doctor.png" width="100%" alt="web doctor"></a><br>
-  <sub><b>web doctor</b></sub>
+  <a href="docs/screen/Web%20search%20with%20right%20side%20bar%20Video%20info.png"><img src="docs/screen/Web%20search%20with%20right%20side%20bar%20Video%20info.png" width="100%" alt="web search — video info side bar"></a><br>
+  <sub><b>video info side bar</b></sub>
 </td>
 <td align="center" width="33%">
-  <a href="docs/screen/web%20-%20Sync%20and%20Ingest.png"><img src="docs/screen/web%20-%20Sync%20and%20Ingest.png" width="100%" alt="web — sync and ingest"></a><br>
-  <sub><b>web — sync &amp; ingest</b></sub>
+  <a href="docs/screen/currupted%20file%20-%20message%20in%20web.png"><img src="docs/screen/currupted%20file%20-%20message%20in%20web.png" width="100%" alt="corrupted file — message in web"></a><br>
+  <sub><b>corrupted file — message in web</b></sub>
 </td>
 </tr>
 <tr>
 <td align="center" width="33%">
-  <a href="docs/screen/currupted%20file%20-%20message%20in%20web.png"><img src="docs/screen/currupted%20file%20-%20message%20in%20web.png" width="100%" alt="corrupted file — message in web"></a><br>
-  <sub><b>corrupted file — message in web</b></sub>
+  <a href="docs/screen/web%20doctor.png"><img src="docs/screen/web%20doctor.png" width="100%" alt="web doctor"></a><br>
+  <sub><b>manage — doctor</b></sub>
+</td>
+<td align="center" width="33%">
+  <a href="docs/screen/web%20-%20Sync%20and%20Ingest.png"><img src="docs/screen/web%20-%20Sync%20and%20Ingest.png" width="100%" alt="web — sync and ingest"></a><br>
+  <sub><b>manage — sync &amp; ingest</b></sub>
+</td>
+<td align="center" width="33%">
+  <a href="docs/screen/Web%20-%20Manager%20-%3E%20General.png"><img src="docs/screen/Web%20-%20Manager%20-%3E%20General.png" width="100%" alt="manage — general"></a><br>
+  <sub><b>manage — general</b></sub>
+</td>
+</tr>
+<tr>
+<td align="center" width="33%">
+  <a href="docs/screen/Web%20Manager%20-%3E%20Background%20Export.png"><img src="docs/screen/Web%20Manager%20-%3E%20Background%20Export.png" width="100%" alt="manage — background export"></a><br>
+  <sub><b>manage — background export</b></sub>
 </td>
 <td width="33%"></td>
 <td width="33%"></td>
