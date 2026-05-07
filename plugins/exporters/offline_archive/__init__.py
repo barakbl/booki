@@ -30,6 +30,7 @@ from __future__ import annotations
 import base64
 import logging
 import mimetypes
+import os
 import re
 import shutil
 import zipfile
@@ -43,7 +44,25 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from core.exporter import Exporter, TaskHandle, register_exporter
 from core.local_files import safe_local_path
-from core.url_safety import is_safe_url
+from core.url_safety import is_externally_fetchable_url, is_safe_url, safe_get
+
+
+# Per-fetch byte caps. Without these, a hostile bookmarked page can pin
+# arbitrary memory by serving a 100 GiB CSS or by 302-chaining to a
+# never-ending stream. Numbers picked to comfortably cover real pages
+# (a fat news article + media is ~10-20 MiB) without OOMing the worker.
+_MAX_HTML_BYTES = 50 * 1024 * 1024          # one page fetch
+_MAX_PDF_BYTES = 200 * 1024 * 1024          # direct PDF download
+_MAX_IMAGE_BYTES = 100 * 1024 * 1024        # direct image download
+_MAX_SUBRESOURCE_BYTES = 25 * 1024 * 1024   # per <img>/<link>/CSS url(...)
+_MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024   # yt-dlp cap
+
+# Refused content types. SVG is XML and can carry <script> + event
+# handlers; if we save it as `slug.svg` and the index links to it, the
+# user opening the bundle (often from `file://`) executes hostile script
+# in a context that can read sibling files. Refuse at fetch time AND at
+# URL classification (`.svg` removed from IMAGE_EXTS below).
+_REFUSED_IMAGE_CTS = {"image/svg+xml"}
 
 
 def _safe_href(url) -> str:
@@ -74,7 +93,7 @@ KNOWN_VIDEO_DOMAINS = {
     "twitch.tv", "www.twitch.tv",
 }
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".avif"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif"}
 DIRECT_DOWNLOAD_EXTS = {".pdf"} | IMAGE_EXTS
 PLAN_HTML = "html"
 PLAN_PDF = "pdf"
@@ -107,7 +126,8 @@ def _ext_from_url(url: str) -> str:
     return Path(path).suffix.lower()
 
 
-def _classify(item: dict, local_roots: list[Path]) -> tuple[str, str]:
+def _classify(item: dict, local_roots: list[Path],
+              allow_svg: bool = False) -> tuple[str, str]:
     """
     URL-only classification (no network). Returns (plan, note).
     Truth at run-time may differ when the server's Content-Type contradicts
@@ -118,6 +138,11 @@ def _classify(item: dict, local_roots: list[Path]) -> tuple[str, str]:
     (the configured `[[sources.directory.dirs]]`). Anything else returns
     a `("skip", reason)` so the runner records it without ever opening
     the file.
+
+    `allow_svg`: opt-in to SVG archiving. Off by default because SVG can
+    carry <script> and on `file://` opens runs in a context Firefox treats
+    as same-origin against sibling archive files. Wired from the exporter
+    option of the same name.
     """
     url = (item.get("url") or "").strip()
     kind = (item.get("kind") or "").lower()
@@ -138,6 +163,15 @@ def _classify(item: dict, local_roots: list[Path]) -> tuple[str, str]:
     ext = _ext_from_url(url)
     if ext == ".pdf":
         return (PLAN_PDF, "URL ends in .pdf")
+    # SVG is image-like by extension but XML-by-content: a saved svg opened
+    # from `file://` can run script. Skip unless the user explicitly opts
+    # in via the `allow_svg` exporter option. (See _REFUSED_IMAGE_CTS.)
+    if ext == ".svg":
+        if not allow_svg:
+            return ("skip",
+                    "SVG images are not archived by default — "
+                    "enable 'Include SVG images' to override")
+        return (PLAN_IMAGE, "URL ends in .svg (allow_svg on)")
     if ext in IMAGE_EXTS:
         return (PLAN_IMAGE, f"URL ends in {ext}")
     if kind == "photo":
@@ -192,6 +226,16 @@ class OfflineArchiveExporter(Exporter):
          "default": True},
         {"name": "sub_lang", "type": "text", "label": "Subtitle language",
          "default": "en"},
+        # SVG is XML and may carry <script> + event handlers. Saving one as
+        # `slug.svg` and linking it from the index means a click navigates
+        # to a `file://` URL where Firefox grants same-origin access to
+        # sibling files. Default off; users who trust their sources (e.g.
+        # an archive of their own design portfolio) can flip this on.
+        {"name": "allow_svg", "type": "bool", "label": "Include SVG images",
+         "default": False,
+         "help": "SVG files can contain <script> and run when opened from "
+                 "the saved bundle. Off by default — turn on only if you "
+                 "trust the source of every selected item."},
     ]
 
     # ── notes / preview ─────────────────────────────────────────────────────
@@ -234,8 +278,9 @@ class OfflineArchiveExporter(Exporter):
         used: set[str] = set()
         rendered: list[dict] = []
         local_roots = list(self.local_roots)
+        allow_svg = bool(options.get("allow_svg", False))
         for it in shown:
-            plan, _ = _classify(it, local_roots)
+            plan, _ = _classify(it, local_roots, allow_svg=allow_svg)
             if plan == "skip":
                 continue
             slug = _unique_slug(it.get("title") or "", used)
@@ -302,6 +347,10 @@ class OfflineArchiveExporter(Exporter):
         video_quality = options.get("video_quality") or "720p"
         include_subs = bool(options.get("include_subs", True))
         sub_lang = (options.get("sub_lang") or "en").strip() or "en"
+        allow_svg = bool(options.get("allow_svg", False))
+        if allow_svg:
+            task.log("note: SVG archiving is enabled — saved .svg files "
+                     "can run script when opened from the bundle")
 
         artifact_dir = task.artifact_dir
         # Working tree is shaped like the final zip:
@@ -339,7 +388,7 @@ class OfflineArchiveExporter(Exporter):
                 task.progress(i - 1, total)
                 task.log(f"[{i}/{total}] {title}")
 
-                plan, reason = _classify(it, local_roots)
+                plan, reason = _classify(it, local_roots, allow_svg=allow_svg)
                 if plan == "skip":
                     task.log(f"  skipped: {reason}")
                     skipped.append({"title": title, "reason": reason})
@@ -360,6 +409,7 @@ class OfflineArchiveExporter(Exporter):
                             sub_lang=sub_lang,
                             task=task,
                             local_roots=local_roots,
+                            allow_svg=allow_svg,
                         )
                         err = ""
                         break
@@ -451,7 +501,8 @@ def _planned_filename(plan: str, slug: str, item: dict) -> str:
 
 def _archive_one(item: dict, plan: str, slug: str, out_dir: Path, *,
                  pw_ctx, video_quality: str, include_subs: bool, sub_lang: str,
-                 task: TaskHandle, local_roots: list[Path]) -> dict:
+                 task: TaskHandle, local_roots: list[Path],
+                 allow_svg: bool = False) -> dict:
     url = (item.get("url") or "").strip()
     # Belt-and-suspenders: _classify already rejects file:// URLs that
     # aren't in roots, but if a plan ever points at one and it slipped
@@ -465,7 +516,7 @@ def _archive_one(item: dict, plan: str, slug: str, out_dir: Path, *,
     if plan == PLAN_PDF:
         return _archive_pdf(url, slug, out_dir)
     if plan == PLAN_IMAGE:
-        return _archive_image(url, slug, out_dir)
+        return _archive_image(url, slug, out_dir, allow_svg=allow_svg)
     if plan == PLAN_LOCAL_PHOTO:
         return _archive_local_photo(item, slug, out_dir, local_roots=local_roots)
     if plan == PLAN_VIDEO:
@@ -479,32 +530,33 @@ def _archive_one(item: dict, plan: str, slug: str, out_dir: Path, *,
 
 
 def _archive_pdf(url: str, slug: str, out_dir: Path) -> dict:
-    import requests
-    r = requests.get(url, stream=True, timeout=60,
-                     headers={"User-Agent": _UA})
-    r.raise_for_status()
+    r = safe_get(url, timeout=60, headers={"User-Agent": _UA},
+                 max_bytes=_MAX_PDF_BYTES)
+    if r is None or not r.ok:
+        raise RuntimeError(f"refused or failed to fetch PDF: {url}")
     dest = out_dir / f"{slug}.pdf"
-    with open(dest, "wb") as f:
-        for chunk in r.iter_content(chunk_size=1 << 15):
-            if chunk:
-                f.write(chunk)
+    dest.write_bytes(r.content)
     return {"filename": dest.name}
 
 
-def _archive_image(url: str, slug: str, out_dir: Path) -> dict:
-    import requests
-    r = requests.get(url, stream=True, timeout=60,
-                     headers={"User-Agent": _UA})
-    r.raise_for_status()
+def _archive_image(url: str, slug: str, out_dir: Path,
+                   allow_svg: bool = False) -> dict:
+    r = safe_get(url, timeout=60, headers={"User-Agent": _UA},
+                 max_bytes=_MAX_IMAGE_BYTES)
+    if r is None or not r.ok:
+        raise RuntimeError(f"refused or failed to fetch image: {url}")
+    ct = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+    if ct in _REFUSED_IMAGE_CTS and not allow_svg:
+        raise RuntimeError(f"refused image content-type: {ct}")
     ext = _ext_from_url(url)
     if not ext:
-        ct = (r.headers.get("Content-Type") or "").split(";")[0].strip()
         ext = mimetypes.guess_extension(ct) or ".bin"
+    if ext == ".svg" and not allow_svg:
+        # Belt-and-suspenders: classifier filters .svg URLs by default,
+        # but extension can also be derived from Content-Type above.
+        raise RuntimeError("SVG images are not archived (script-capable)")
     dest = out_dir / f"{slug}{ext}"
-    with open(dest, "wb") as f:
-        for chunk in r.iter_content(chunk_size=1 << 15):
-            if chunk:
-                f.write(chunk)
+    dest.write_bytes(r.content)
     return {"filename": dest.name}
 
 
@@ -517,8 +569,34 @@ def _archive_local_photo(item: dict, slug: str, out_dir: Path, *,
             f"image_path outside configured directories: {raw}")
     ext = src.suffix.lower() or ".jpg"
     dest = out_dir / f"{slug}{ext}"
-    shutil.copy2(src, dest)
+    _copy_no_follow(src, dest)
     return {"filename": dest.name}
+
+
+def _no_follow_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _copy_no_follow(src: Path, dest: Path) -> None:
+    """`shutil.copy2` follows symlinks; between `safe_local_path`'s
+    resolve+validate and the actual open, a local writer with access to
+    the configured root could replace the file with a symlink to e.g.
+    `/etc/shadow`. Open with `O_NOFOLLOW` so the leaf-component swap
+    fails closed instead of leaking the symlink target into the bundle.
+    """
+    fd = os.open(str(src), _no_follow_flags())
+    with os.fdopen(fd, "rb") as f, open(dest, "wb") as out:
+        shutil.copyfileobj(f, out, length=1 << 16)
+
+
+def _read_no_follow(src: Path) -> bytes:
+    """Same TOCTOU rationale as `_copy_no_follow`."""
+    fd = os.open(str(src), _no_follow_flags())
+    with os.fdopen(fd, "rb") as f:
+        return f.read()
 
 
 def _archive_video(url: str, slug: str, out_dir: Path, *,
@@ -542,6 +620,10 @@ def _archive_video(url: str, slug: str, out_dir: Path, *,
         "subtitleslangs": [sub_lang] if include_subs else [],
         "continue": True,
         "overwrites": False,
+        # Hard cap on per-video size so a hostile / mis-classified URL can't
+        # fill the disk. yt-dlp aborts when the format's reported size
+        # exceeds the cap.
+        "max_filesize": _MAX_VIDEO_BYTES,
         "postprocessors": [
             {"key": "FFmpegThumbnailsConvertor", "format": "jpg", "when": "before_dl"},
         ],
@@ -561,6 +643,16 @@ def _archive_video(url: str, slug: str, out_dir: Path, *,
             video_path = merged
         else:
             raise RuntimeError(f"downloaded file missing: {video_path}")
+    # Defense in depth: the outtmpl prefix should already keep yt-dlp inside
+    # `out_dir`, but a misbehaving extractor / postprocessor that returned
+    # a path outside would otherwise leak files onto the booki host
+    # filesystem (the zip step skips them, but they'd persist).
+    out_dir_real = out_dir.resolve()
+    try:
+        video_path.resolve().relative_to(out_dir_real)
+    except ValueError:
+        raise RuntimeError(
+            f"yt-dlp wrote outside output directory: {video_path}")
 
     thumb = None
     for ext in (".jpg", ".jpeg", ".webp", ".png"):
@@ -600,11 +692,21 @@ def _archive_html(url: str, slug: str, out_dir: Path, *, pw_ctx,
     only paths inside those roots get inlined, the rest are dropped.
     """
     if pw_ctx is not None:
+        # Initial gate: refuse private / loopback / IMDS targets up front.
+        # Subresources/redirects past page.goto are still subject to whatever
+        # Chromium's network stack does — we re-validate every subresource
+        # in `_PlaywrightFetcher`, but in-page redirects during page.goto
+        # itself are not interceptable here.
+        if not is_externally_fetchable_url(url):
+            raise RuntimeError(f"refusing to fetch internal URL: {url}")
         html, final_url, fetcher = pw_ctx.fetch(url)
     else:
-        import requests
-        r = requests.get(url, timeout=60, headers={"User-Agent": _UA})
-        r.raise_for_status()
+        r = safe_get(url, timeout=60, headers={"User-Agent": _UA},
+                     max_bytes=_MAX_HTML_BYTES)
+        if r is None or not r.ok:
+            raise RuntimeError(f"refused or failed to fetch page: {url}")
+        # Decode using the response's chosen encoding; safe_get already
+        # capped the body so this is bounded.
         html = r.text
         final_url = r.url
         fetcher = _RequestsFetcher()
@@ -629,9 +731,49 @@ def _archive_html(url: str, slug: str, out_dir: Path, *, pw_ctx,
             task.log(f"  embedded PDF skipped ({pdf_url}): {e}")
 
     inlined = _inline_subresources(html, final_url, fetcher, pdf_map=pdf_map)
+    inlined = _inject_csp(inlined)
     dest = out_dir / f"{slug}.html"
     dest.write_text(inlined, encoding="utf-8")
     return {"filename": dest.name, "extra": extras}
+
+
+# Restrictive CSP we inject into every saved per-page snapshot. The page's
+# inline scripts (which we intentionally don't strip — see _inline_subresources)
+# would otherwise execute at `file://` origin and could fetch sibling files.
+# This blocks script execution and external network entirely; everything we
+# care about is already inlined as data: URIs or sibling files.
+#   - default-src 'none'         : deny everything not explicitly allowed
+#   - img-src data: 'self'       : inlined images + sibling thumbs
+#   - style-src 'unsafe-inline' data: : inlined <style> blocks
+#   - font-src data:             : inlined @font-face
+#   - media-src data: 'self'     : inlined audio/video, sibling files
+#   - frame-src 'self' data:     : embedded sibling PDFs, data-uri previews
+#   - object-src 'self' data:    : same, for <object>/<embed>
+#   - script-src 'none'          : no script, period (kills file:// XSS)
+_CSP_META = (
+    '<meta http-equiv="Content-Security-Policy" '
+    'content="default-src \'none\'; '
+    "img-src data: 'self'; "
+    "style-src 'unsafe-inline' data:; "
+    "font-src data:; "
+    "media-src data: 'self'; "
+    "frame-src 'self' data:; "
+    "object-src 'self' data:; "
+    'script-src \'none\'">'
+)
+_HEAD_OPEN_RE = re.compile(r"<head\b[^>]*>", re.IGNORECASE)
+
+
+def _inject_csp(html: str) -> str:
+    """Inject a restrictive CSP <meta> right after <head>, or prepend it
+    when the page has no <head> tag. Idempotent if the meta is already
+    present (we don't re-inject)."""
+    if "Content-Security-Policy" in html:
+        return html
+    m = _HEAD_OPEN_RE.search(html)
+    if m:
+        return html[:m.end()] + _CSP_META + html[m.end():]
+    return _CSP_META + html
 
 
 # Patterns (tag-attr level) we want to walk. We intentionally avoid pulling
@@ -800,7 +942,7 @@ class _LocalAwareFetcher:
             self._task.log(f"  inline skipped (outside configured directories): {url}")
             raise RuntimeError(f"local file outside configured directories: {url}")
         self.last_content_type = _guess_ct(url)
-        return p.read_bytes()
+        return _read_no_follow(p)
 
     def fetch(self, url: str) -> bytes:
         if _is_file_url(url):
@@ -818,23 +960,32 @@ class _LocalAwareFetcher:
 
 
 class _RequestsFetcher:
-    """Plain HTTP fetcher used when Playwright isn't available."""
+    """Plain HTTP fetcher used when Playwright isn't available.
+
+    Routes every request through `core.url_safety.safe_get` so each
+    subresource hop is re-validated against the SSRF allowlist, DNS-pinned
+    against rebinding, and capped at `_MAX_SUBRESOURCE_BYTES`. Without this
+    layer, a hostile page could include `<link rel="stylesheet"
+    href="http://169.254.169.254/...">` and have IMDS contents inlined as
+    base64 into the saved archive.
+    """
 
     def __init__(self):
-        import requests
-        self._sess = requests.Session()
-        self._sess.headers.update({"User-Agent": _UA})
         self.last_content_type = ""
 
     def fetch(self, url: str) -> bytes:
-        r = self._sess.get(url, timeout=60)
-        r.raise_for_status()
+        r = safe_get(url, timeout=60, headers={"User-Agent": _UA},
+                     max_bytes=_MAX_SUBRESOURCE_BYTES)
+        if r is None or not r.ok:
+            raise RuntimeError(f"refused or failed: {url}")
         self.last_content_type = r.headers.get("Content-Type", "")
         return r.content
 
     def fetch_text(self, url: str) -> str:
-        r = self._sess.get(url, timeout=60)
-        r.raise_for_status()
+        r = safe_get(url, timeout=60, headers={"User-Agent": _UA},
+                     max_bytes=_MAX_SUBRESOURCE_BYTES)
+        if r is None or not r.ok:
+            raise RuntimeError(f"refused or failed: {url}")
         self.last_content_type = r.headers.get("Content-Type", "")
         return r.text
 
@@ -880,25 +1031,42 @@ class _PlaywrightContext:
 
 
 class _PlaywrightFetcher:
-    """Subresource fetcher backed by a Playwright APIRequestContext."""
+    """Subresource fetcher backed by a Playwright APIRequestContext.
+
+    Pre-flights every URL through `is_externally_fetchable_url`; we cannot
+    DNS-pin Chromium's resolver from Python, but a static allowlist still
+    blocks the obvious LAN/IMDS exfil shapes. Body size is capped at
+    `_MAX_SUBRESOURCE_BYTES` to bound memory.
+    """
 
     def __init__(self, context):
         self._req = context.request
         self.last_content_type = ""
 
-    def fetch(self, url: str) -> bytes:
+    def _get(self, url: str):
+        if not is_externally_fetchable_url(url):
+            raise RuntimeError(f"refused (not externally fetchable): {url}")
         r = self._req.get(url, timeout=60_000)
         if not r.ok:
             raise RuntimeError(f"HTTP {r.status} on {url}")
+        return r
+
+    def fetch(self, url: str) -> bytes:
+        r = self._get(url)
         self.last_content_type = r.headers.get("content-type", "")
-        return r.body()
+        body = r.body()
+        if len(body) > _MAX_SUBRESOURCE_BYTES:
+            body = body[:_MAX_SUBRESOURCE_BYTES]
+        return body
 
     def fetch_text(self, url: str) -> str:
-        r = self._req.get(url, timeout=60_000)
-        if not r.ok:
-            raise RuntimeError(f"HTTP {r.status} on {url}")
+        r = self._get(url)
         self.last_content_type = r.headers.get("content-type", "")
-        return r.text()
+        text = r.text()
+        # Approximate cap (chars vs bytes); good enough to bound memory.
+        if len(text) > _MAX_SUBRESOURCE_BYTES:
+            text = text[:_MAX_SUBRESOURCE_BYTES]
+        return text
 
 
 # ─── feature probes ─────────────────────────────────────────────────────────

@@ -31,7 +31,7 @@ import ipaddress
 import socket
 import threading
 from typing import Iterator, Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 
 # Schemes the ingest pipeline + web UI treat as "live" links.
@@ -228,3 +228,74 @@ def is_externally_fetchable_url(url: str) -> bool:
         if _is_blocked_ip(ip):
             return False
     return True
+
+
+# ─── Outbound GET ──────────────────────────────────────────────────────────
+
+# Process-wide cap on concurrent outbound fetches initiated by booki — across
+# /api/link, the favicon proxy, and the offline-archive exporter. Without
+# this, a flood of concurrent requests multiplies into a matching number of
+# socket + buffer holders. (P2-05)
+_FETCH_CONCURRENCY = threading.Semaphore(4)
+_MAX_FETCH_REDIRECTS = 5
+
+
+def safe_get(url: str, *, timeout: int, headers: dict,
+             max_bytes: int):
+    """Outbound GET with a re-validated SSRF gate at every redirect hop.
+
+    Returns the final `requests.Response` (with `.content` capped at
+    `max_bytes` and the connection already closed) or None on any guard
+    failure. We intentionally do NOT use `allow_redirects=True`: urllib3's
+    follow re-runs DNS a second time and can land on a blocked IP without us
+    noticing. Manual redirects let us re-run `is_externally_fetchable_url`
+    on every hop, and the IP is pinned across the validation/connect pair so
+    a DNS-rebinding race is impossible. (P2-01)
+    """
+    import requests
+
+    if not _FETCH_CONCURRENCY.acquire(timeout=timeout):
+        return None
+    try:
+        current = url
+        for _ in range(_MAX_FETCH_REDIRECTS + 1):
+            if not is_externally_fetchable_url(current):
+                return None
+            host = (urlparse(current).hostname or "").lower()
+            ip = resolve_safe_ip(host) if host else None
+            if ip is None:
+                return None
+            try:
+                with pinned_dns(host, ip):
+                    r = requests.get(current, timeout=timeout,
+                                     allow_redirects=False, stream=True,
+                                     headers=headers)
+            except requests.RequestException:
+                return None
+            if r.is_redirect or r.is_permanent_redirect:
+                loc = r.headers.get("Location") or ""
+                r.close()
+                if not loc:
+                    return None
+                current = urljoin(current, loc)
+                continue
+            try:
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in r.iter_content(chunk_size=8192):
+                    if not chunk:
+                        continue
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total >= max_bytes:
+                        break
+                r._content = b"".join(chunks)[:max_bytes]
+            except requests.RequestException:
+                r.close()
+                return None
+            finally:
+                r.close()
+            return r
+        return None
+    finally:
+        _FETCH_CONCURRENCY.release()

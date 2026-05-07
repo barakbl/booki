@@ -30,7 +30,6 @@ import re
 import shutil
 import subprocess
 import sys
-import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -121,82 +120,11 @@ MANUAL_PATH = ["manual"]
 # ─── Manual link sync ─────────────────────────────────────────────────────────
 
 _MAX_TITLE_FETCH_BYTES = 2 * 1024 * 1024   # 2 MB — titles live in <head>
-_MAX_FETCH_REDIRECTS = 5
-
-# Concurrency cap on outbound fetches initiated by request handlers.
-# Without this, a flood of concurrent /api/link calls multiplies into a
-# matching number of socket+title-buffer holders. (P2-05)
-_FETCH_CONCURRENCY = threading.Semaphore(4)
 
 
-def _safe_get(url: str, *, timeout: int, headers: dict,
-              max_bytes: int) -> Optional[requests.Response]:
-    """Outbound GET with a re-validated SSRF gate at every redirect hop.
-
-    Returns the final Response (with `.content` capped at `max_bytes`)
-    or None on any guard failure. We intentionally do NOT use
-    `allow_redirects=True`: the underlying urllib3 retry happens via DNS
-    a second time and re-resolution can land on a blocked IP without us
-    noticing. Manual redirects let us re-run `is_externally_fetchable_url`
-    on every hop, and the IP is pinned across the validation/connect
-    pair so a DNS-rebinding race is impossible. (P2-01)
-    """
-    from urllib.parse import urlparse
-    from .url_safety import is_externally_fetchable_url, resolve_safe_ip, pinned_dns
-
-    # Per-call concurrency gate. The semaphore is process-wide so a
-    # request-handler thread pool can't open more than _FETCH_CONCURRENCY
-    # outbound connections simultaneously. (P2-05)
-    if not _FETCH_CONCURRENCY.acquire(timeout=timeout):
-        return None
-    try:
-        current = url
-        for _ in range(_MAX_FETCH_REDIRECTS + 1):
-            if not is_externally_fetchable_url(current):
-                return None
-            # Pin the IP so the connect() goes to the same address we just
-            # validated. Without this, getaddrinfo runs again inside
-            # requests.get and can return a different (blocked) IP. (P2-01)
-            host = (urlparse(current).hostname or "").lower()
-            ip = resolve_safe_ip(host) if host else None
-            if ip is None:
-                return None
-            try:
-                with pinned_dns(host, ip):
-                    r = requests.get(current, timeout=timeout, allow_redirects=False,
-                                     stream=True, headers=headers)
-            except requests.RequestException:
-                return None
-            if r.is_redirect or r.is_permanent_redirect:
-                loc = r.headers.get("Location") or ""
-                r.close()
-                if not loc:
-                    return None
-                # Resolve relative redirects against the previous URL.
-                from urllib.parse import urljoin
-                current = urljoin(current, loc)
-                continue
-            # Terminal response — read up to `max_bytes` then drop the rest.
-            try:
-                chunks: list[bytes] = []
-                total = 0
-                for chunk in r.iter_content(chunk_size=8192):
-                    if not chunk:
-                        continue
-                    chunks.append(chunk)
-                    total += len(chunk)
-                    if total >= max_bytes:
-                        break
-                r._content = b"".join(chunks)[:max_bytes]
-            except requests.RequestException:
-                r.close()
-                return None
-            finally:
-                r.close()
-            return r
-        return None
-    finally:
-        _FETCH_CONCURRENCY.release()
+# Re-export for backwards compatibility with callers that imported from here.
+# Canonical home is `core.url_safety.safe_get`.
+from .url_safety import safe_get as _safe_get  # noqa: E402,F401
 
 
 def _fetch_page_title(url: str, timeout: int = 5) -> str:

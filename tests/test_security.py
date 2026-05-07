@@ -203,3 +203,165 @@ def test_shutdown_requires_token(client) -> None:
     assert r.status_code == 401
     r = client.post("/api/shutdown", headers={"Authorization": "Bearer bogus"})
     assert r.status_code == 401
+
+
+# ─── Offline-archive exporter hardening ───────────────────────────────────
+
+def test_offline_archive_classify_skips_svg_by_default() -> None:
+    """SVG is XML-and-script-capable; a saved `slug.svg` opened from the
+    bundle would XSS the user at `file://` origin. The classifier defaults
+    to skipping `.svg` URLs (the user can opt back in via the `allow_svg`
+    exporter option), and IMAGE_EXTS must not include it."""
+    from plugins.exporters.offline_archive import IMAGE_EXTS, _classify
+
+    assert ".svg" not in IMAGE_EXTS
+    plan, reason = _classify({"url": "https://x.com/logo.svg"}, [])
+    assert plan == "skip"
+    assert "svg" in reason.lower()
+
+
+def test_offline_archive_classify_allows_svg_when_opted_in() -> None:
+    """With `allow_svg=True`, `.svg` URLs are routed to PLAN_IMAGE."""
+    from plugins.exporters.offline_archive import PLAN_IMAGE, _classify
+
+    plan, _ = _classify({"url": "https://x.com/logo.svg"}, [],
+                        allow_svg=True)
+    assert plan == PLAN_IMAGE
+
+
+def test_offline_archive_archive_image_refuses_svg_content_type(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Even when the URL doesn't end in .svg, a server returning
+    `Content-Type: image/svg+xml` must be refused — extension would
+    otherwise be derived from the content type and we'd write a .svg file."""
+    from plugins.exporters import offline_archive as oa
+
+    class _FakeResp:
+        ok = True
+        content = b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"
+        headers = {"Content-Type": "image/svg+xml"}
+
+    monkeypatch.setattr(oa, "safe_get",
+                        lambda url, **kw: _FakeResp())
+    with pytest.raises(RuntimeError, match="svg"):
+        oa._archive_image("https://x.com/photo", "slug", tmp_path)
+
+
+def test_offline_archive_archive_image_writes_svg_when_opted_in(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """With `allow_svg=True`, the SVG content-type guard is bypassed and
+    the file is written with a .svg extension."""
+    from plugins.exporters import offline_archive as oa
+
+    class _FakeResp:
+        ok = True
+        content = b"<svg xmlns='http://www.w3.org/2000/svg'/>"
+        headers = {"Content-Type": "image/svg+xml"}
+
+    monkeypatch.setattr(oa, "safe_get",
+                        lambda url, **kw: _FakeResp())
+    out = oa._archive_image("https://x.com/logo.svg", "slug", tmp_path,
+                            allow_svg=True)
+    assert out["filename"] == "slug.svg"
+    assert (tmp_path / "slug.svg").exists()
+
+
+def test_offline_archive_inject_csp_into_saved_html() -> None:
+    """Saved per-page snapshots must carry a restrictive CSP <meta> so
+    inline `<script>` from the original (hostile) page can't elevate to
+    file:// XSS when the archive is opened locally."""
+    from plugins.exporters.offline_archive import _inject_csp
+
+    out = _inject_csp("<html><head><title>x</title></head><body>hi</body></html>")
+    assert "Content-Security-Policy" in out
+    assert "script-src 'none'" in out
+    # Idempotent — already-injected pages aren't re-injected.
+    assert _inject_csp(out) == out
+    # No <head> → CSP prepended.
+    assert _inject_csp("<body>hi</body>").startswith("<meta")
+
+
+def test_offline_archive_requests_fetcher_uses_safe_get(monkeypatch) -> None:
+    """`_RequestsFetcher` must route every subresource through `safe_get`
+    so SSRF is gated and bytes are capped — without this guard, a hostile
+    page can include `<link rel='stylesheet' href='http://169.254.169.254/...'>`
+    and have IMDS contents inlined into the saved bundle."""
+    from plugins.exporters import offline_archive as oa
+
+    seen: list[str] = []
+
+    class _FakeResp:
+        ok = True
+        content = b"body { color: red }"
+        text = "body { color: red }"
+        headers = {"Content-Type": "text/css"}
+
+    def _fake_safe_get(url, **kw):
+        seen.append(url)
+        return _FakeResp()
+
+    monkeypatch.setattr(oa, "safe_get", _fake_safe_get)
+    f = oa._RequestsFetcher()
+    f.fetch("https://example.com/a.css")
+    f.fetch_text("https://example.com/b.css")
+    assert seen == ["https://example.com/a.css", "https://example.com/b.css"]
+
+
+def test_offline_archive_requests_fetcher_propagates_safe_get_refusal(
+    monkeypatch,
+) -> None:
+    """When `safe_get` returns None (SSRF guard tripped), the fetcher
+    must raise — so `_inline_subresources` falls into its silent-failure
+    branch and the tag keeps its original remote URL instead of inlining
+    nothing as a no-op."""
+    from plugins.exporters import offline_archive as oa
+
+    monkeypatch.setattr(oa, "safe_get", lambda url, **kw: None)
+    f = oa._RequestsFetcher()
+    with pytest.raises(RuntimeError):
+        f.fetch("http://169.254.169.254/latest/meta-data/")
+
+
+def test_offline_archive_local_aware_fetcher_uses_no_follow(
+    tmp_path: Path,
+) -> None:
+    """The local-file fetcher must open with O_NOFOLLOW so a TOCTOU swap
+    (resolve → unlink → symlink → read) can't escape the configured roots."""
+    from plugins.exporters.offline_archive import _LocalAwareFetcher
+
+    root = tmp_path / "root"
+    root.mkdir()
+    real = root / "ok.txt"
+    real.write_bytes(b"hello")
+
+    class _Task:
+        def log(self, *a, **k): ...
+
+    fetcher = _LocalAwareFetcher(inner=None, local_roots=[root.resolve()],
+                                 task=_Task())
+    # Allowed read: file inside root, not a symlink.
+    assert fetcher.fetch("file://" + str(real)) == b"hello"
+
+    # Symlink at the leaf — even if target is inside the same root,
+    # safe_local_path resolves it; on the second resolution attack vector
+    # (replacing the file at the resolved path with a symlink), O_NOFOLLOW
+    # would fail with ELOOP. We can't easily simulate the race, but we can
+    # at least confirm O_NOFOLLOW is being applied by checking the read
+    # helper rejects a direct symlink.
+    import os as _os
+    sym = root / "sym.txt"
+    _os.symlink(real, sym)
+    from plugins.exporters.offline_archive import _read_no_follow
+    with pytest.raises(OSError):
+        _read_no_follow(sym)
+
+
+def test_safe_get_re_exported_from_url_safety() -> None:
+    """`safe_get` lives in `core.url_safety` (canonical) and is re-exported
+    from `core.sync` for back-compat with the favicon proxy and any out-of-
+    tree callers. Both must point at the same function object."""
+    from core.sync import _safe_get
+    from core.url_safety import safe_get
+    assert _safe_get is safe_get

@@ -619,11 +619,11 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             _, blob, mime = entry
             return Response(content=blob, media_type=mime,
                             headers={"Cache-Control": "public, max-age=43200"})
-        from .sync import _safe_get
+        from .url_safety import safe_get
         url = f"https://{domain}/favicon.ico"
-        r = _safe_get(url, timeout=4,
-                      headers={"User-Agent": "booki/1.0 favicon-proxy"},
-                      max_bytes=256 * 1024)
+        r = safe_get(url, timeout=4,
+                     headers={"User-Agent": "booki/1.0 favicon-proxy"},
+                     max_bytes=256 * 1024)
         if r is None or not r.ok or not r.content:
             raise HTTPException(404, "favicon not found")
         mime = (r.headers.get("Content-Type") or "image/x-icon").split(";")[0].strip()
