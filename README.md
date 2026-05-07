@@ -67,17 +67,25 @@ side-by-side and clicks open the full-size asset. GitHub renders this. -->
 <table>
 <tr>
 <td align="center" width="33%">
-  <a href="docs/screen/web%20search.gif"><img src="docs/screen/web%20search.gif" width="100%" alt="web search"></a><br>
-  <sub><b>web search</b></sub>
+  <a href="docs/screen/web%20search%20video.png"><img src="docs/screen/web%20search%20video.png" width="100%" alt="web search (videos tab)"></a><br>
+  <sub><b>web search — videos tab</b></sub>
 </td>
 <td align="center" width="33%">
   <a href="docs/screen/web%20doctor.png"><img src="docs/screen/web%20doctor.png" width="100%" alt="web doctor"></a><br>
   <sub><b>web doctor</b></sub>
 </td>
 <td align="center" width="33%">
-  <a href="docs/screen/ingest%20and%20sync%20web%20ui.png"><img src="docs/screen/ingest%20and%20sync%20web%20ui.png" width="100%" alt="ingest and sync web ui"></a><br>
-  <sub><b>ingest and sync web ui</b></sub>
+  <a href="docs/screen/web%20-%20Sync%20and%20Ingest.png"><img src="docs/screen/web%20-%20Sync%20and%20Ingest.png" width="100%" alt="web — sync and ingest"></a><br>
+  <sub><b>web — sync &amp; ingest</b></sub>
 </td>
+</tr>
+<tr>
+<td align="center" width="33%">
+  <a href="docs/screen/currupted%20file%20-%20message%20in%20web.png"><img src="docs/screen/currupted%20file%20-%20message%20in%20web.png" width="100%" alt="corrupted file — message in web"></a><br>
+  <sub><b>corrupted file — message in web</b></sub>
+</td>
+<td width="33%"></td>
+<td width="33%"></td>
 </tr>
 </table>
 
@@ -124,9 +132,17 @@ side-by-side and clicks open the full-size asset. GitHub renders this. -->
   <sub><b>autocomplete in cli</b></sub>
 </td>
 <td align="center" width="33%">
-  <a href="docs/screen/manager%20tray%20app.png"><img src="docs/screen/manager%20tray%20app.png" width="100%" alt="manager tray app"></a><br>
+  <a href="docs/screen/booki%20manager%20app%20%28systray%29.png"><img src="docs/screen/booki%20manager%20app%20%28systray%29.png" width="100%" alt="booki manager app (systray)"></a><br>
   <sub><b>manager tray app</b></sub>
 </td>
+</tr>
+<tr>
+<td align="center" width="33%">
+  <a href="docs/screen/corrupted%20file%20doctor%20cli.gif"><img src="docs/screen/corrupted%20file%20doctor%20cli.gif" width="100%" alt="corrupted file doctor cli"></a><br>
+  <sub><b>corrupted file doctor (cli)</b></sub>
+</td>
+<td width="33%"></td>
+<td width="33%"></td>
 </tr>
 </table>
 
