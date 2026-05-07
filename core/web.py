@@ -634,6 +634,61 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         return Response(content=r.content, media_type=mime,
                         headers={"Cache-Control": "public, max-age=43200"})
 
+    # Video-thumbnail proxy — same shape as the favicon proxy. Lets the UI
+    # render YouTube / Vimeo poster frames without an `img-src https://*.ytimg.com`
+    # CSP allowance and without leaking the user's IP / Referer to the CDN
+    # for every bookmarked video. Host allowlist keeps this from becoming
+    # a generic image-fetch open relay; safe_get covers SSRF on top.
+    _thumb_cache: dict[str, tuple[float, bytes, str]] = {}
+    _thumb_lock = threading.Lock()
+    _THUMB_TTL = 12 * 3600.0  # 12h
+    # Exact hosts + suffix-matched parent domains. Suffix matching covers
+    # YouTube's load-balanced thumbnail CDN (`i.ytimg.com`, `i9.ytimg.com`,
+    # `i123.ytimg.com`, …) without allowing `ytimg.com.attacker.example`.
+    _THUMB_HOST_EXACT = frozenset({
+        "img.youtube.com",
+        "yt3.ggpht.com",
+        "yt3.googleusercontent.com",
+        "i.vimeocdn.com",
+    })
+    _THUMB_HOST_SUFFIX = (".ytimg.com",)
+
+    @app.get("/api/video-thumbnail")
+    def video_thumbnail_proxy(url: str):
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(url)
+        except ValueError:
+            raise HTTPException(400, "invalid url")
+        if parsed.scheme not in ("http", "https"):
+            raise HTTPException(400, "scheme not allowed")
+        host = (parsed.hostname or "").lower()
+        ok = host in _THUMB_HOST_EXACT or any(
+            host.endswith(s) for s in _THUMB_HOST_SUFFIX
+        )
+        if not ok:
+            raise HTTPException(400, "host not allowed")
+        now = time.monotonic()
+        with _thumb_lock:
+            entry = _thumb_cache.get(url)
+        if entry and entry[0] > now:
+            _, blob, mime = entry
+            return Response(content=blob, media_type=mime,
+                            headers={"Cache-Control": "public, max-age=43200"})
+        from .url_safety import safe_get
+        r = safe_get(url, timeout=6,
+                     headers={"User-Agent": "booki/1.0 video-thumb-proxy"},
+                     max_bytes=2 * 1024 * 1024)
+        if r is None or not r.ok or not r.content:
+            raise HTTPException(404, "thumbnail not found")
+        mime = (r.headers.get("Content-Type") or "image/jpeg").split(";")[0].strip()
+        if not mime.startswith("image/"):
+            mime = "image/jpeg"
+        with _thumb_lock:
+            _thumb_cache[url] = (now + _THUMB_TTL, r.content, mime)
+        return Response(content=r.content, media_type=mime,
+                        headers={"Cache-Control": "public, max-age=43200"})
+
     @app.get("/api/local-file")
     def local_file(path: str):
         """

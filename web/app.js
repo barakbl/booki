@@ -2236,6 +2236,19 @@ function imageSrcFor(url) {
   return url;
 }
 
+// Video poster frames go through the same-origin proxy so the page CSP
+// can stay at `img-src 'self' data:` and we don't leak the user's IP /
+// Referer to YouTube/Vimeo on every videos-tab render. The backend
+// allow-lists a fixed set of CDN hosts (i.ytimg.com, vimeocdn, etc.)
+// and uses the SSRF-gated safe_get path. Non-http(s) URLs (or hosts the
+// proxy refuses) fall back to the bare URL — the <img onerror> handler
+// then swaps in the 🎬 placeholder, matching the prior UX.
+function videoThumbSrcFor(url) {
+  if (!url) return "";
+  if (!/^https?:\/\//i.test(url)) return imageSrcFor(url);
+  return `/api/video-thumbnail?url=${encodeURIComponent(url)}`;
+}
+
 const PHOTO_DIRECT_RE = /\.(jpg|jpeg|png|gif|webp|heic|avif|bmp|tiff?|raf|cr[23]|nef|nrw|arw|sr[fr2]|dng|orf|rw2|pef|srw|raw|x3f|iiq|3fr|erf|kdc|mef|mrw|rwl)$/i;
 
 function isDirectImageUrl(url) {
@@ -2527,7 +2540,7 @@ function renderVideoGrid() {
     li.dataset.id = b.id;
 
     const thumbHtml = thumb
-      ? `<img loading="lazy" src="${escapeHtml(imageSrcFor(thumb))}" alt="">`
+      ? `<img loading="lazy" src="${escapeHtml(videoThumbSrcFor(thumb))}" alt="">`
       : `<span class="video-placeholder">🎬</span>`;
     const durHtml = dur ? `<span class="video-duration">${escapeHtml(dur)}</span>` : "";
 

@@ -358,6 +358,42 @@ def test_offline_archive_local_aware_fetcher_uses_no_follow(
         _read_no_follow(sym)
 
 
+def test_video_thumbnail_proxy_host_allowlist(client) -> None:
+    """The video-thumbnail proxy must refuse non-allowed hosts (it's a
+    fetch primitive backed by safe_get; without a host allowlist it would
+    be a generic image-fetch open relay) and must not be tricked by
+    suffix-look-alike spoofs."""
+    # Disallowed hosts → 400.
+    for url in [
+        "https://attacker.example/x.jpg",
+        "http://127.0.0.1/x.jpg",
+        "http://169.254.169.254/x.jpg",
+        # Suffix spoof: literal `ytimg.com.<attacker>` must NOT match
+        # `.ytimg.com` rule.
+        "https://ytimg.com.attacker.example/x.jpg",
+    ]:
+        r = client.get(f"/api/video-thumbnail?url={url}")
+        assert r.status_code == 400, f"{url} unexpectedly accepted: {r.text}"
+
+    # Non-http(s) schemes refused.
+    r = client.get("/api/video-thumbnail?url=file:///etc/passwd")
+    assert r.status_code == 400 and "scheme" in r.text.lower()
+
+    # Allowed hosts pass the gate (the actual fetch may 404 in the test
+    # env — that's a downstream concern, not a host-allowlist concern).
+    for url in [
+        "https://i.ytimg.com/vi/abc/hqdefault.jpg",
+        "https://i9.ytimg.com/vi/abc/m.jpg",
+        "https://img.youtube.com/vi/abc/m.jpg",
+        "https://i.vimeocdn.com/video/123_640.jpg",
+    ]:
+        r = client.get(f"/api/video-thumbnail?url={url}")
+        # Anything except 400 ("host not allowed") proves the gate let it
+        # through. In CI without network, safe_get returns None → 404.
+        assert r.status_code != 400 or "host" not in r.text.lower(), (
+            f"{url} unexpectedly rejected at host check: {r.text}")
+
+
 def test_safe_get_re_exported_from_url_safety() -> None:
     """`safe_get` lives in `core.url_safety` (canonical) and is re-exported
     from `core.sync` for back-compat with the favicon proxy and any out-of-
