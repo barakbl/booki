@@ -23,6 +23,7 @@ import logging
 import os
 import platform
 import shutil
+import subprocess
 import sys
 from collections import defaultdict
 from datetime import date, datetime
@@ -574,6 +575,83 @@ def _print_suggestions(s: Style, cfg: dict, lib: dict, db_count: Optional[int],
         _row(s, GTIP, color, msg)
 
 
+# ─── Fix picker ───────────────────────────────────────────────────────────────
+
+def _pick_and_fix_corrupted(s: Style, lib: dict, bookmarks_dir: Path) -> None:
+    """If parse errors exist and we're on an interactive TTY with fzf available,
+    show a multi-select picker so the user can open broken file(s) in $EDITOR.
+
+    Tab toggles selection, Enter opens, Esc/Ctrl-C skips. One editor invocation
+    receives all selected paths so e.g. vim opens them as buffers.
+    """
+    errors: list[LoadError] = lib.get("errors", []) or []
+    if not errors:
+        return
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return
+    if shutil.which("fzf") is None:
+        return
+
+    by_path: dict[str, list[LoadError]] = defaultdict(list)
+    for e in errors:
+        by_path[e.path].append(e)
+
+    rows: list[str] = []
+    for p in sorted(by_path):
+        errs = by_path[p]
+        primary = next((er for er in errs if er.kind != "schema"), errs[0])
+        rel = _rel_to(p, bookmarks_dir)
+        rows.append(f"{p}\t[{primary.kind}]\t{rel}\t{primary.short()}")
+
+    print()
+    n = len(rows)
+    prompt = (f"  Open {n} corrupted file(s) in $EDITOR via fzf picker? "
+              f"{s.dim('[y/N] ')}")
+    try:
+        answer = input(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+    if answer not in ("y", "yes"):
+        return
+
+    args = [
+        "fzf",
+        "--multi",
+        "--ansi",
+        "--delimiter=\t",
+        "--with-nth=2..",
+        "--prompt=fix❯ ",
+        "--header", "Tab: multi-select · Enter: edit · Esc: skip",
+    ]
+    try:
+        proc = subprocess.run(
+            args,
+            input="\n".join(rows) + "\n",
+            text=True,
+            capture_output=True,
+        )
+    except OSError as e:
+        print(f"  {s.red('fzf failed to launch:')} {e}")
+        return
+
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return
+
+    paths = [ln.split("\t", 1)[0] for ln in proc.stdout.splitlines() if ln.strip()]
+    if not paths:
+        return
+
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vi"
+    try:
+        subprocess.run([editor, *paths])
+    except OSError as e:
+        print(f"  {s.red('failed to launch editor:')} {e}")
+        return
+
+    print(f"  {s.dim('When done, re-run `booki doctor` to verify and `booki ingest` to refresh the index.')}")
+
+
 # ─── Footer ───────────────────────────────────────────────────────────────────
 
 def _footer(s: Style, width: int) -> None:
@@ -622,6 +700,7 @@ def run(cfg: dict, config_path: Path, *, color: bool) -> int:
     _print_library(s, cfg, lib, db_count)
     _print_corrupted(s, lib, bookmarks_dir)
     _print_suggestions(s, cfg, lib, db_count, sys_payload)
+    _pick_and_fix_corrupted(s, lib, bookmarks_dir)
     _footer(s, width)
     return 0
 
