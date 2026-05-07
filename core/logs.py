@@ -161,6 +161,20 @@ def setup_logging(cfg: dict, *, level_override: Optional[str] = None) -> None:
             else JsonFormatter()
         )
         root.addHandler(fh)
+        # Tighten log-file perms — the default umask leaves them
+        # world-readable on most Linux distros, and Booki logs
+        # contain bookmark URLs / partial frontmatter that don't
+        # belong outside the user's account. (P5-08)
+        try:
+            import os as _os
+            if file_path.exists():
+                _os.chmod(file_path, 0o600)
+            for i in range(1, int(backup_count) + 1):
+                rotated = file_path.with_name(file_path.name + f".{i}")
+                if rotated.exists():
+                    _os.chmod(rotated, 0o600)
+        except OSError:
+            pass
 
     for name, lvl in per_logger.items():
         logging.getLogger(name).setLevel(str(lvl).upper())

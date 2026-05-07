@@ -46,7 +46,10 @@ collection  = "bookmarks"
 provider     = "local"
 local_model  = "all-MiniLM-L6-v2"          # solid default; fast on CPU
 openai_model = "text-embedding-3-small"    # if provider = "openai"
-# openai_api_key = ""                      # falls back to $OPENAI_API_KEY
+# openai_api_key = ""                      # PREFER $OPENAI_API_KEY env var
+                                            # — keys in config end up in
+                                            # backups / shell history; Booki
+                                            # logs a WARNING when set inline.
 
 
 # ─── LLM (used for enrichment + Ask answers) ────────────────────────────────
@@ -69,13 +72,42 @@ n_results = 5                              # how many bookmarks to retrieve per 
 # ─── Web UI ─────────────────────────────────────────────────────────────────
 
 [web]
-host   = "127.0.0.1"      # bind to 0.0.0.0 to expose on your LAN
+# WARNING: Booki has no built-in authentication. `host = "127.0.0.1"`
+# (the default) keeps every /api/* route loopback-only. Setting this
+# to "0.0.0.0" or any other interface exposes your bookmark library —
+# and the LLM-call surface — to anyone who can reach this machine.
+# Only do that behind a reverse proxy that adds auth.
+host   = "127.0.0.1"
 port   = 8765
 reload = false            # uvicorn auto-reload — dev only
+
+# Favicon source for the web UI. Default "none" uses the bundled SVG
+# placeholder — no third-party fetches per row. "local" enables the
+# server-side /api/favicon proxy (SSRF-gated). "google" sends every
+# bookmark hostname to https://www.google.com/s2/favicons (privacy
+# leak, opt-in only).
+# favicon_provider = "none"   # "none" | "local" | "google"
+
 # Browsers may load the UI from these origins. Same-origin
-# (http://host:port + localhost loopbacks) is always allowed; list extras
-# below, or set ["*"] to disable origin checks entirely (not recommended).
+# (http://host:port + localhost loopbacks) is always allowed; list
+# extras below. Setting ["*"] is dangerous: any web page you visit
+# can read /api/* responses, including your bookmarks via /api/ask.
 # cors_origins = ["http://my-other-host:8765"]
+
+# Extra hosts allowed in the Host: header. TrustedHostMiddleware
+# blocks DNS-rebinding by default; only loopback names + the configured
+# `host` are allowed unless you add to this list.
+# allowed_hosts = ["my-host.local"]
+
+
+# ─── Security knobs ─────────────────────────────────────────────────────────
+
+[security]
+# When false (default), /api/link refuses URLs whose host resolves to a
+# private / loopback / link-local / IMDS address. Set to true if you
+# legitimately bookmark intranet pages (and accept that subsequent
+# enrich / sync / download operations will dereference them).
+# allow_internal_targets = false
 
 
 # ─── Logging ────────────────────────────────────────────────────────────────

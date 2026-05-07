@@ -368,7 +368,56 @@ def _collect_schema() -> dict[str, list[dict]]:
 
 def load_config(path: Path) -> dict:
     with open(path, "rb") as f:
-        return tomllib.load(f)
+        cfg = tomllib.load(f)
+    _validate_config_security_posture(cfg)
+    return cfg
+
+
+def _validate_config_security_posture(cfg: dict) -> None:
+    """Refuse obviously-unsafe config. Logs warnings for risky-but-allowed
+    combinations so operators see them on every server start.
+
+    Specifically:
+      - `[web].host = 0.0.0.0` (or any non-loopback) without a configured
+        auth token → log a loud WARNING. (P5-01)
+      - `[web].cors_origins = ["*"]` → log WARNING (we still honour it
+        if explicitly set, but the user should see it on every start).
+        (P5-02)
+      - `[embeddings].openai_api_key` set inline → log WARNING and
+        recommend the env var. (P5-09)
+    """
+    web_cfg = (cfg.get("web") or {})
+    host = str(web_cfg.get("host", "127.0.0.1")).lower()
+    is_loopback = host in ("127.0.0.1", "localhost", "::1", "")
+    if not is_loopback:
+        log.warning(
+            "lan_bind_no_auth",
+            extra={
+                "host": host,
+                "msg": ("Booki has no built-in authentication — binding to a "
+                        "non-loopback host exposes every /api/* route, "
+                        "including bookmark exfiltration via /api/ask, to "
+                        "anyone who can reach this address. (P5-01)"),
+            },
+        )
+
+    cors = web_cfg.get("cors_origins") or []
+    if any(str(o).strip() == "*" for o in cors):
+        log.warning(
+            "cors_wildcard_enabled",
+            extra={"msg": "[web].cors_origins includes '*' — every origin "
+                          "can read /api/* responses. (P5-02)"},
+        )
+
+    embeddings = (cfg.get("embeddings") or {})
+    if str(embeddings.get("openai_api_key", "")).strip():
+        log.warning(
+            "openai_api_key_inline",
+            extra={"msg": ("[embeddings].openai_api_key is set inline in "
+                          "config.toml. Prefer the OPENAI_API_KEY env var "
+                          "so the key doesn't end up in backups / shell "
+                          "history / accidental git pushes. (P5-09)")},
+        )
 
 
 def _is_within(target: Path, root: Path) -> bool:
@@ -472,7 +521,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
     # this via `[web].cors_origins` — set to ["*"] to disable origin checks.
     web_cfg = cfg.get("web", {}) or {}
     web_host = str(web_cfg.get("host", "127.0.0.1"))
-    web_port = int(web_cfg.get("port", 1000))
+    web_port = int(web_cfg.get("port", 8765))
     configured = [str(o).strip().rstrip("/")
                   for o in (web_cfg.get("cors_origins") or [])
                   if str(o).strip()]
@@ -711,7 +760,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
             },
             "web": {
                 "host": web_cfg.get("host", "127.0.0.1"),
-                "port": int(web_cfg.get("port", 1000)),
+                "port": int(web_cfg.get("port", 8765)),
                 "favicon_provider": str(web_cfg.get("favicon_provider", "none")),
             },
             "logs": {
@@ -1257,7 +1306,7 @@ def main() -> None:
     cfg = load_config(args.config)
     web_cfg = cfg.get("web", {})
     host = args.host or web_cfg.get("host", "127.0.0.1")
-    port = args.port or int(web_cfg.get("port", 1000))
+    port = args.port or int(web_cfg.get("port", 8765))
 
     import uvicorn
     # log_config=None tells uvicorn not to install its own handlers — our

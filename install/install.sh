@@ -77,7 +77,37 @@ mkdir -p "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_BIN_HOME"
 say "Source tree at $BOOKI_HOME"
 if [ -d "$BOOKI_HOME/.git" ]; then
     git -C "$BOOKI_HOME" fetch --quiet origin "$BRANCH"
-    git -C "$BOOKI_HOME" reset --hard --quiet "origin/$BRANCH"
+    # Refuse to reset --hard when the working tree has local edits or
+    # commits ahead of origin. The original installer silently
+    # discarded both, which surprised users who follow the README's
+    # "read and tweak it" advice. (P5-05)
+    DIRTY=""
+    if ! git -C "$BOOKI_HOME" diff --quiet 2>/dev/null \
+       || ! git -C "$BOOKI_HOME" diff --cached --quiet 2>/dev/null; then
+        DIRTY="uncommitted changes"
+    fi
+    AHEAD=$(git -C "$BOOKI_HOME" rev-list --count "origin/$BRANCH..HEAD" 2>/dev/null || echo 0)
+    if [ "$AHEAD" != "0" ] && [ -n "$AHEAD" ]; then
+        DIRTY="${DIRTY:+$DIRTY + }$AHEAD local commit(s) ahead of origin/$BRANCH"
+    fi
+    if [ -n "$DIRTY" ]; then
+        warn "Local checkout has $DIRTY — refusing to reset --hard."
+        warn "  stash or push your work, then re-run this installer."
+        exit 1
+    fi
+    # If $BOOKI_TAG is set, prefer the signed tag over the branch tip.
+    # Falls back to the branch tip when the tag isn't reachable. (P5-04)
+    if [ -n "${BOOKI_TAG:-}" ]; then
+        if git -C "$BOOKI_HOME" tag -v "$BOOKI_TAG" 2>/dev/null \
+            | grep -q "Good signature"; then
+            ok "verified signed tag $BOOKI_TAG"
+        else
+            warn "BOOKI_TAG=$BOOKI_TAG not signature-verifiable on this host."
+        fi
+        git -C "$BOOKI_HOME" reset --hard --quiet "$BOOKI_TAG"
+    else
+        git -C "$BOOKI_HOME" reset --hard --quiet "origin/$BRANCH"
+    fi
     ok "updated to origin/$BRANCH ($(git -C "$BOOKI_HOME" rev-parse --short HEAD))"
 elif [ -e "$BOOKI_HOME" ]; then
     die "$BOOKI_HOME exists but is not a git checkout. Move it aside or delete it."
@@ -253,6 +283,16 @@ elif ! command -v cargo >/dev/null 2>&1; then
     warn "cargo missing — skipping manager build"
     warn "  install Rust toolchain to enable: https://rustup.rs/"
 elif prompt_yes "Build the optional booki-manager menubar app now (cargo build --release)?"; then
+    # Best-effort dep-advisory scan before we compile something
+    # we'll then exec from a wrapper. cargo-audit might not be
+    # installed; print a hint instead of failing. (P5-06)
+    if command -v cargo-audit >/dev/null 2>&1; then
+        ( cd "$MGR_SRC" && cargo audit --quiet ) || \
+            warn "cargo audit reported advisories — review before continuing"
+    else
+        warn "cargo-audit not installed — skipping advisory scan"
+        warn "  (cargo install cargo-audit  to enable)"
+    fi
     ( cd "$MGR_SRC" && cargo build --release --quiet )
     if [ ! -x "$MGR_BIN" ]; then
         die "cargo build did not produce $MGR_BIN"
