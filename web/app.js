@@ -2718,18 +2718,18 @@ Tabs.register({
                 <p class="hint-text">Pull from sources, optionally enrich.</p>
               </header>
               <fieldset class="job-options" data-kind="sync">
-                <label class="check"><input type="checkbox" data-flag="--enrich"> Summarize via LLM (<code>--enrich</code>)</label>
-                <label class="check"><input type="checkbox" data-flag="--enrich-meta"> Run enrichers (<code>--enrich-meta</code>)</label>
-                <label class="check"><input type="checkbox" data-flag="--check-dead-links"> Check dead links</label>
-                <label class="check"><input type="checkbox" data-flag="--all"> Re-process every item (<code>--all</code>)</label>
-                <label class="check"><input type="checkbox" data-flag="--no-sync"> Skip sync step (<code>--no-sync</code>)</label>
-                <label class="check"><input type="checkbox" data-flag="--dry-run"> Dry run</label>
+                <div class="job-check-row"><label class="check"><input type="checkbox" data-flag="--enrich"> Summarize via LLM (<code>--enrich</code>)</label>${helpIconHtml("--enrich")}</div>
+                <div class="job-check-row"><label class="check"><input type="checkbox" data-flag="--enrich-meta"> Run enrichers (<code>--enrich-meta</code>)</label>${helpIconHtml("--enrich-meta")}</div>
+                <div class="job-check-row"><label class="check"><input type="checkbox" data-flag="--check-dead-links"> Check dead links</label>${helpIconHtml("--check-dead-links")}</div>
+                <div class="job-check-row"><label class="check"><input type="checkbox" data-flag="--all"> Re-process every item (<code>--all</code>)</label>${helpIconHtml("--all")}</div>
+                <div class="job-check-row"><label class="check"><input type="checkbox" data-flag="--no-sync"> Skip sync step (<code>--no-sync</code>)</label>${helpIconHtml("--no-sync")}</div>
+                <div class="job-check-row"><label class="check"><input type="checkbox" data-flag="--dry-run"> Dry run</label>${helpIconHtml("--dry-run")}</div>
                 <div class="job-source-row">
-                  <span class="job-source-label">Sources <span class="hint-text">(blank = all)</span></span>
+                  <span class="job-source-label">Sources <span class="hint-text">(blank = all)</span> ${helpIconHtml("sources")}</span>
                   <div class="job-source-chips" id="jobSyncSources"></div>
                 </div>
                 <div class="job-source-row">
-                  <span class="job-source-label">Enrichers <span class="hint-text">(blank = all)</span></span>
+                  <span class="job-source-label">Enrichers <span class="hint-text">(blank = all)</span> ${helpIconHtml("enrichers")}</span>
                   <div class="job-source-chips" id="jobSyncEnrichers"></div>
                 </div>
               </fieldset>
@@ -2741,7 +2741,7 @@ Tabs.register({
                 <p class="hint-text">Re-index bookmarks into the vector DB.</p>
               </header>
               <fieldset class="job-options" data-kind="ingest">
-                <label class="check"><input type="checkbox" data-flag="--reset"> Reset collection (<code>--reset</code>)</label>
+                <div class="job-check-row"><label class="check"><input type="checkbox" data-flag="--reset"> Reset collection (<code>--reset</code>)</label>${helpIconHtml("--reset")}</div>
               </fieldset>
               <button type="button" class="btn primary job-run-btn" data-kind="ingest">▶ Run ingest</button>
             </article>
@@ -5275,6 +5275,128 @@ function _renderTaskRow(t) {
     </div>`;
 }
 
+
+// ─── Manage › Sync & Ingest help modal ──────────────────────────────
+//
+// Each sync / ingest option has an inline `?` button beside it. Clicking
+// pops a small centered modal with a longer explanation than the inline
+// label can carry. Help text is keyed by either the CLI flag (`--enrich`)
+// or a synthetic group key (`sources`, `enrichers`).
+
+const JOB_HELP = {
+  "--enrich": {
+    title: "Summarize via LLM (--enrich)",
+    body: "Fetch each item's page content and ask the configured LLM (Ollama) to write a short summary. Combine with --all to re-summarize everything, or with --no-sync to summarize without re-pulling sources.",
+  },
+  "--enrich-meta": {
+    title: "Run enrichers (--enrich-meta)",
+    body: "Runs every registered enricher plugin (GitHub, photo, document, …) to add API-driven metadata to existing items. Limit to specific plugins via the Enrichers chips below.",
+  },
+  "--check-dead-links": {
+    title: "Check dead links",
+    body: "After syncing, probe each unchecked URL for availability. Combine with --all to recheck every link, not just the unchecked ones.",
+  },
+  "--all": {
+    title: "Re-process every item (--all)",
+    body: "With --check-dead-links: recheck every URL. With --enrich / --enrich-meta: re-enrich every item, ignoring existing summaries and metadata.",
+  },
+  "--no-sync": {
+    title: "Skip sync step (--no-sync)",
+    body: "Skip pulling from sources and run only the enrich / dead-link phases. Useful when you only want to summarize or recheck links without touching source data.",
+  },
+  "--dry-run": {
+    title: "Dry run",
+    body: "Show what would change without writing anything to disk. Safe to combine with any other flag.",
+  },
+  "sources": {
+    title: "Sources",
+    body: "Limit the sync to specific source plugins (Chrome, Safari, Firefox, YouTube, …). Leave blank to sync every available source.",
+  },
+  "enrichers": {
+    title: "Enrichers",
+    body: "Limit --enrich-meta to specific enricher plugins (e.g. just GitHub). Leave blank to run every registered enricher.",
+  },
+  "--reset": {
+    title: "Reset collection (--reset)",
+    body: "Wipe the vector collection and re-index every bookmark from scratch. Slow on large libraries — typically only needed after embedding-model changes or index corruption.",
+  },
+};
+
+function helpIconHtml(key) {
+  if (!JOB_HELP[key]) return "";
+  return `<button type="button" class="help-icon-btn" data-help-key="${escapeHtml(key)}" aria-label="Help" title="What does this do?">?</button>`;
+}
+
+let _helpPopoverEl = null;
+let _helpPopoverAnchor = null;
+
+function openHelpPopover(anchor, key) {
+  const entry = JOB_HELP[key];
+  if (!entry) return;
+  closeHelpPopover();
+  const pop = document.createElement("div");
+  pop.className = "help-popover";
+  pop.setAttribute("role", "tooltip");
+  pop.innerHTML = `<h4>${escapeHtml(entry.title)}</h4><p>${escapeHtml(entry.body)}</p>`;
+  // Pre-position off-screen so we can measure, then place. Using `fixed`
+  // keeps the popover anchored to the icon even if the page scrolls.
+  pop.style.left = "-9999px";
+  pop.style.top  = "-9999px";
+  document.body.appendChild(pop);
+  _helpPopoverEl = pop;
+  _helpPopoverAnchor = anchor;
+  positionHelpPopover();
+}
+
+function positionHelpPopover() {
+  if (!_helpPopoverEl || !_helpPopoverAnchor) return;
+  const r = _helpPopoverAnchor.getBoundingClientRect();
+  const pop = _helpPopoverEl;
+  const pw = pop.offsetWidth;
+  const ph = pop.offsetHeight;
+  const pad = 6;
+  // Default: just to the right of the icon, vertically centered on it.
+  let left = r.right + pad;
+  let top  = r.top + r.height / 2 - ph / 2;
+  // If we'd overflow the viewport on the right, flip to the left side.
+  if (left + pw > window.innerWidth - 4) left = r.left - pw - pad;
+  // Clamp into the viewport vertically.
+  top = Math.max(4, Math.min(top, window.innerHeight - ph - 4));
+  pop.style.left = `${Math.round(left)}px`;
+  pop.style.top  = `${Math.round(top)}px`;
+}
+
+function closeHelpPopover() {
+  if (_helpPopoverEl) {
+    _helpPopoverEl.remove();
+    _helpPopoverEl = null;
+    _helpPopoverAnchor = null;
+  }
+}
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest(".help-icon-btn");
+  if (btn) {
+    e.preventDefault();
+    e.stopPropagation();
+    // Toggle: clicking the same icon again dismisses the popover.
+    if (_helpPopoverAnchor === btn) { closeHelpPopover(); return; }
+    openHelpPopover(btn, btn.dataset.helpKey);
+    return;
+  }
+  // Click anywhere else dismisses an open popover.
+  if (_helpPopoverEl && !e.target.closest(".help-popover")) closeHelpPopover();
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && _helpPopoverEl) closeHelpPopover();
+});
+
+// Reposition (don't close) on resize / scroll so a focus-induced auto-scroll
+// the moment the user clicks the icon doesn't dismiss the popover before
+// they ever see it.
+window.addEventListener("resize", positionHelpPopover);
+window.addEventListener("scroll", positionHelpPopover, true);
 
 // ─── Manage › Sync & Ingest sub-tab ─────────────────────────────────
 //
