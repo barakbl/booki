@@ -58,6 +58,7 @@ const ADV_STORAGE_KEY_V1 = "booki.advSearch.v1";
 function makeDefaultAdv() {
   return {
     sources: new Set(),
+    lists: new Set(),
     impMin: null,
     impMax: null,
     hasSummary: false,
@@ -132,6 +133,8 @@ const els = {
   secSummary: $("secSummary"),
   secNotes: $("secNotes"),
   secTags: $("secTags"),
+  secLists: $("secLists"),
+  detailLists: $("detailLists"),
   secKeywords: $("secKeywords"),
   secExtras: $("secExtras"),
   detailExtras: $("detailExtras"),
@@ -143,6 +146,7 @@ const els = {
   editImp: $("editImp"),
   editImpVal: $("editImpVal"),
   editTags: $("editTags"),
+  editListsField: $("editListsField"),
   editSummary: $("editSummary"),
   editNotes: $("editNotes"),
   editKeywords: $("editKeywords"),
@@ -797,6 +801,12 @@ function makeAdvPredicate(adv) {
       for (const s of adv.sources) if (all.has(s)) { ok = true; break; }
       if (!ok) return false;
     }
+    if (adv.lists.size) {
+      const have = new Set((b.lists || []).filter(Boolean));
+      let ok = false;
+      for (const name of adv.lists) if (have.has(name)) { ok = true; break; }
+      if (!ok) return false;
+    }
     const imp = b.importance || 0;
     if (adv.impMin != null && imp < adv.impMin) return false;
     if (adv.impMax != null && imp > adv.impMax) return false;
@@ -920,6 +930,7 @@ function topFieldChipHtml(bm, adv) {
 
 function advActiveCount(adv) {
   let n = adv.sources.size;
+  n += adv.lists.size;
   if (adv.impMin != null) n++;
   if (adv.impMax != null) n++;
   if (adv.hasSummary) n++;
@@ -932,6 +943,7 @@ function advActiveCount(adv) {
 function _hydrateAdvFromJson(adv, j) {
   if (!j) return;
   adv.sources = new Set(j.sources || []);
+  adv.lists = new Set(j.lists || []);
   adv.impMin = j.impMin ?? null;
   adv.impMax = j.impMax ?? null;
   adv.hasSummary = !!j.hasSummary;
@@ -950,6 +962,7 @@ function _hydrateAdvFromJson(adv, j) {
 function _serializeAdv(adv) {
   return {
     sources: [...adv.sources],
+    lists: [...adv.lists],
     impMin: adv.impMin,
     impMax: adv.impMax,
     hasSummary: adv.hasSummary,
@@ -1094,6 +1107,10 @@ function mountAdvancedSearch(host, opts = {}) {
           <h4>Sources <span class="hint-text">(any)</span></h4>
           <div class="chip-picker" data-role="sources"></div>
         </div>
+        <div class="adv-group adv-misc" data-role="listsGroup">
+          <h4>Lists <span class="hint-text">(any)</span></h4>
+          <div class="chip-picker" data-role="lists"></div>
+        </div>
         <div class="adv-group adv-misc">
           <h4>Top <span class="hint-text">(field · direction · count)</span></h4>
           <div class="adv-row adv-top-row">
@@ -1218,6 +1235,27 @@ function mountAdvancedSearch(host, opts = {}) {
 
     renderChipPicker($$("sources"), sortPairs(sourceCounts), cur.sources,
       (n) => { toggleSet(cur.sources, n); apply(); });
+
+    // Lists: aggregated from the same in-scope pool, so the Photos tab only
+    // surfaces lists that have at least one photo in them, etc. The Search
+    // tab's pool is unrestricted so it shows every list.
+    const listCounts = {};
+    for (const b of pool) {
+      for (const name of (b.lists || [])) {
+        if (!name) continue;
+        listCounts[name] = (listCounts[name] || 0) + 1;
+      }
+    }
+    const listsHost = $$("lists");
+    const listsGroup = root.querySelector('[data-role="listsGroup"]');
+    const listEntries = sortPairs(listCounts);
+    if (listsGroup) {
+      // Hide the entire group when there are no lists in scope — keeps the
+      // panel tidy on a fresh install before any list has been created.
+      listsGroup.classList.toggle("hidden", listEntries.length === 0 && cur.lists.size === 0);
+    }
+    renderChipPicker(listsHost, listEntries, cur.lists,
+      (n) => { toggleSet(cur.lists, n); apply(); });
 
     // Datalist for the top-field combobox — narrowed to fields that make
     // sense in this scope (e.g. Videos hides github_* / photo_*).
@@ -1594,6 +1632,7 @@ async function openDetail(id) {
   toggleSection(els.secSummary, d.summary, () => els.detailSummary.textContent = d.summary);
   toggleSection(els.secNotes,   d.notes,   () => els.detailNotes.textContent = d.notes);
   toggleSection(els.secTags,    d.tags?.length, () => renderChips(els.detailTags, d.tags));
+  toggleSection(els.secLists,   d.lists?.length, () => renderChips(els.detailLists, d.lists));
   toggleSection(els.secKeywords, d.keywords?.length, () => renderChips(els.detailKeywords, d.keywords));
 
   els.detailSource.textContent     = d.source || "—";
@@ -1898,6 +1937,109 @@ els.drawerClose.addEventListener("click", closeDrawer);
 
 // ─── Edit modal ────────────────────────────────────────────────────
 
+// Aggregate all list names currently in use across the loaded bookmarks.
+// Used as the autocomplete suggestion pool in the edit dialog.
+function _allKnownLists() {
+  const set = new Set();
+  for (const b of state.all) {
+    for (const name of (b.lists || [])) {
+      if (name) set.add(String(name));
+    }
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+// Lightweight tag-input control:
+//   - existing items render as oval chips with a × remove button
+//   - a trailing <input> with a <datalist> backs autocomplete + free-form add
+//   - Enter / "," commits the typed value; Backspace on empty pops the last
+//     chip (standard tag-input behavior)
+//
+// Returned interface: { getValue(), setValue(arr) }. The control is
+// instance-local — call mountChipInput per dialog open so suggestions
+// reflect whatever's currently in state.all.
+let _chipInputSeq = 0;
+function mountChipInput(host, opts = {}) {
+  if (!host) return { getValue: () => [], setValue: () => {} };
+  const placeholder = opts.placeholder || "add…";
+  const suggestions = typeof opts.suggestions === "function" ? opts.suggestions : () => [];
+  const datalistId = `chipDl_${++_chipInputSeq}`;
+  const internal = { values: Array.isArray(opts.initial) ? [...opts.initial] : [] };
+
+  function render(focusInput = false) {
+    const chosen = new Set(internal.values);
+    const options = suggestions()
+      .filter(n => !chosen.has(n))
+      .map(n => `<option value="${escapeHtml(n)}">`)
+      .join("");
+    const chips = internal.values.map(v => `
+      <span class="chip-pill" data-name="${escapeHtml(v)}">
+        ${escapeHtml(v)}
+        <button type="button" class="chip-remove" aria-label="Remove ${escapeHtml(v)}" tabindex="-1">×</button>
+      </span>`).join("");
+    host.innerHTML = `
+      ${chips}
+      <input class="chip-input-text" type="text" list="${datalistId}"
+             placeholder="${escapeHtml(placeholder)}"
+             autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <datalist id="${datalistId}">${options}</datalist>`;
+    if (focusInput) host.querySelector(".chip-input-text")?.focus();
+  }
+
+  function commit(raw) {
+    const value = String(raw || "").trim();
+    if (!value) return;
+    if (internal.values.includes(value)) return; // dedup
+    internal.values.push(value);
+    render(true);
+  }
+
+  // One delegated listener per mount — survives re-renders since we read
+  // dataset off the actual click target inside the host's tree.
+  host.addEventListener("click", (e) => {
+    const remove = e.target.closest(".chip-remove");
+    if (remove) {
+      const pill = remove.parentElement;
+      const name = pill?.dataset.name;
+      if (name) {
+        internal.values = internal.values.filter(v => v !== name);
+        render(true);
+      }
+      return;
+    }
+    if (e.target === host) host.querySelector(".chip-input-text")?.focus();
+  });
+  host.addEventListener("keydown", (e) => {
+    if (!e.target.classList?.contains("chip-input-text")) return;
+    const input = e.target;
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      commit(input.value);
+      input.value = "";
+    } else if (e.key === "Backspace" && !input.value && internal.values.length) {
+      internal.values.pop();
+      render(true);
+    }
+  });
+  // Datalist option pick fires "change"; commit it so the user doesn't have
+  // to also press Enter.
+  host.addEventListener("change", (e) => {
+    if (!e.target.classList?.contains("chip-input-text")) return;
+    if (e.target.value) {
+      commit(e.target.value);
+      e.target.value = "";
+    }
+  });
+
+  render(false);
+  return {
+    getValue: () => [...internal.values],
+    setValue: (vals) => { internal.values = Array.isArray(vals) ? [...vals] : []; render(false); },
+  };
+}
+
+let _editListsInput = null;
+
 function openEdit() {
   if (!state.detail) return;
   const d = state.detail;
@@ -1905,6 +2047,11 @@ function openEdit() {
   els.editImp.value = d.importance || 0;
   els.editImpVal.textContent = d.importance || 0;
   els.editTags.value = (d.tags || []).join(", ");
+  _editListsInput = mountChipInput(els.editListsField, {
+    initial: d.lists || [],
+    suggestions: _allKnownLists,
+    placeholder: "add list…",
+  });
   els.editSummary.value = d.summary || "";
   els.editNotes.value = d.notes || "";
   els.editKeywords.value = (d.keywords || []).join(", ");
@@ -1937,6 +2084,7 @@ els.editForm.addEventListener("submit", async (e) => {
     title: els.editTitle.value.trim(),
     importance: parseInt(els.editImp.value, 10),
     tags: parseList(els.editTags.value),
+    lists: _editListsInput ? _editListsInput.getValue() : [],
     summary: els.editSummary.value,
     notes: els.editNotes.value,
     keywords: parseList(els.editKeywords.value),
@@ -1962,6 +2110,10 @@ els.editForm.addEventListener("submit", async (e) => {
       state.all[idx] = { ...state.all[idx], ...updated, has_summary: !!updated.summary };
     }
     applyFilter();
+    // The adv-search chip pickers (Sources / Lists) aggregate from state.all,
+    // so refresh every scope's adv UI in case this edit added or removed a
+    // list / changed source mix.
+    refreshAdvancedFilters();
     closeEdit();
     openDetail(state.currentId);
     showToast("Saved ✓");

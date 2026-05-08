@@ -22,7 +22,7 @@
   form-action 'self';
 ">
 <title>Booki — Bookmarks</title>
-<link rel="stylesheet" href="/static/styles.css?v=78">
+<link rel="stylesheet" href="/static/styles.css?v=80">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E📚%3C/text%3E%3C/svg%3E">
 </head>
 <body>
@@ -150,6 +150,11 @@
       <div id="detailTags" class="tag-list"></div>
     </section>
 
+    <section class="detail-section" id="secLists">
+      <h3>Lists</h3>
+      <div id="detailLists" class="tag-list"></div>
+    </section>
+
     <section class="detail-section" id="secKeywords">
       <h3>Keywords</h3>
       <div id="detailKeywords" class="tag-list"></div>
@@ -189,6 +194,9 @@
       </label>
       <label>Tags (comma-separated)
         <input type="text" name="tags" id="editTags" placeholder="ai, tools, python">
+      </label>
+      <label>Lists
+        <div class="chip-input" id="editListsField"></div>
       </label>
       <label>Summary
         <textarea name="summary" id="editSummary" rows="3"></textarea>
@@ -263,6 +271,6 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script src="/static/app.js?v=87"></script>
+<script src="/static/app.js?v=90"></script>
 </body>
 </html>

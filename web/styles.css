@@ -1882,6 +1882,73 @@ mark.hl {
   color: var(--text-dim);
 }
 
+/* Tag-input control: existing items are oval pills with a × remove
+   button; trailing <input> with <datalist> autocompletes existing names
+   and accepts free-form new entries. Used today by the edit dialog's
+   Lists field; intentionally generic so other fields can adopt it. */
+.chip-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 6px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: text;
+  /* Modal labels apply text-transform: uppercase; reset it for the
+     control's contents so chip text reads as the user typed it. */
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: normal;
+}
+.chip-input:focus-within {
+  border-color: var(--accent);
+}
+.chip-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 10px;
+  background: rgba(139, 92, 246, 0.15);
+  border: 1px solid rgba(139, 92, 246, 0.32);
+  color: var(--text);
+  border-radius: 999px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.chip-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1;
+  padding: 1px 5px;
+  margin-left: 2px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.chip-remove:hover,
+.chip-remove:focus-visible {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+  outline: none;
+}
+.chip-input-text {
+  flex: 1 1 120px;
+  min-width: 80px;
+  padding: 4px 4px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13.5px;
+  font-family: inherit;
+}
+.chip-input-text:focus { outline: none; }
+
 .kv {
   display: grid;
   grid-template-columns: 110px 1fr;

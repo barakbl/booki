@@ -122,6 +122,36 @@ def test_put_bookmark_updates_frontmatter_on_disk(client, bookmarks_dir: Path) -
     assert '"notes": "edited via API"' in after
 
 
+def test_put_bookmark_lists_round_trip(client, bookmarks_dir: Path) -> None:
+    """Editing the `lists` field through the UI route lands it in the
+    booki_user_override block and shows up in the next GET."""
+    items = client.get("/api/bookmarks").json()
+    target = next(b for b in items if b["title"] == "Plain Bookmark")
+    file_path = bookmarks_dir / "chrome" / "bookmarks_bar" / "plain--aaaa1111.md"
+
+    r = client.put(
+        f"/api/bookmarks/{target['id']}",
+        json={"lists": ["favorites", "to-read"]},
+    )
+    assert r.status_code == 200
+    assert r.json()["lists"] == ["favorites", "to-read"]
+
+    # Re-read through the list endpoint — the override flows through view_fm
+    # so the lists field reflects the user edit even though it was written
+    # into the nested override block.
+    after = next(
+        b for b in client.get("/api/bookmarks").json() if b["id"] == target["id"]
+    )
+    assert after["lists"] == ["favorites", "to-read"]
+
+    # On disk the override is what changed; the top-level `lists` (if any)
+    # is left alone.
+    raw = file_path.read_text()
+    assert "booki_user_override:" in raw
+    assert '"lists":' in raw
+    assert '"favorites"' in raw and '"to-read"' in raw
+
+
 def test_put_bookmark_unknown_id_is_404(client) -> None:
     r = client.put(
         "/api/bookmarks/0000000000000000",

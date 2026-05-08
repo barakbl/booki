@@ -30,6 +30,8 @@ Booki pulls items from **pluggable sources** — Chrome / Safari / Firefox bookm
 
 - **🔝 Top-N advanced filter** — sort by any numeric / date / duration field. Field combo scoped per tab; sort-key value rendered on each result row.
 
+- **📑 Lists** — chip-input editor on every bookmark, with autocomplete from existing lists. The advanced filter shows lists per-tab — Photos only surfaces lists that contain at least one photo, Videos only those with a video, etc.
+
 - **🪄 4-step export wizard** — *Exporter → Options → Organize → Preview*. Drag-and-drop tree, sandboxed live preview, per-export RTL / footer / search-toggle options.
 
 - **📤 Pluggable exporters** — themed HTML page, offline ZIP (full pages + PDFs + videos), data dumps (CSV / JSON / YAML / Markdown), photo galleries, browser-importable bookmarks file.
