@@ -3218,14 +3218,36 @@ Tabs.register({
 
         <section class="subtab-panel" data-subpanel="logs">
           <div class="logs-toolbar">
-            <select id="logsFile" title="Log file"></select>
-            <label>tail
-              <input type="number" id="logsTail" value="500" min="1" max="5000">
-            </label>
+            <div class="logs-control">
+              <select id="logsFile" title="Log file"></select>
+              ${helpIconHtml("logs-file")}
+            </div>
+            <div class="logs-control">
+              <label>tail
+                <input type="number" id="logsTail" value="500" min="1" max="5000">
+              </label>
+              ${helpIconHtml("logs-tail")}
+            </div>
+            <div class="logs-control">
+              <label>level
+                <select id="logsLevel" title="Show this level and above">
+                  <option value="ALL">all</option>
+                  <option value="DEBUG">DEBUG+</option>
+                  <option value="INFO">INFO+</option>
+                  <option value="WARNING">WARNING+</option>
+                  <option value="ERROR">ERROR+</option>
+                  <option value="CRITICAL">CRITICAL only</option>
+                </select>
+              </label>
+              ${helpIconHtml("logs-level")}
+            </div>
             <button type="button" class="btn" id="logsRefresh">↻ Refresh</button>
-            <label class="toggle">
-              <input type="checkbox" id="logsFollow"> follow
-            </label>
+            <div class="logs-control">
+              <label class="toggle">
+                <input type="checkbox" id="logsFollow"> follow
+              </label>
+              ${helpIconHtml("logs-follow")}
+            </div>
             <span class="hint-text" id="logsMeta"></span>
           </div>
           <pre id="logsViewer" class="logs-viewer"><span class="hint-text">No log loaded.</span></pre>
@@ -3399,6 +3421,18 @@ function pluginGroup(title, rows) {
 // ─── Manage: Logs viewer ───────────────────────────────────────────
 
 let _logsFollowTimer = null;
+// The most recent payload from /api/logs/…  Cached so changing the level
+// filter (or any pure render-side knob) re-paints instantly without
+// hitting the network again.
+let _logsLastLines = [];
+
+// stdlib-aligned level ranks. Lines whose level isn't in this map (or that
+// don't parse as JSON) are treated as level-less — included only in the
+// "ALL" view, hidden when any level threshold is selected.
+const LOG_LEVEL_RANK = {
+  DEBUG: 10, INFO: 20, WARNING: 30, ERROR: 40, CRITICAL: 50,
+};
+const LOGS_LEVEL_KEY = "booki.logs.level";
 
 function initManageLogs() {
   document.getElementById("logsRefresh")
@@ -3412,6 +3446,21 @@ function initManageLogs() {
             if (e.target.checked) startLogsFollow();
             else stopLogsFollow();
           });
+  // Restore the user's last level choice, then re-render the cached
+  // lines (no fetch) when they change it.
+  const levelSel = document.getElementById("logsLevel");
+  if (levelSel) {
+    try {
+      const saved = localStorage.getItem(LOGS_LEVEL_KEY);
+      if (saved && [...levelSel.options].some(o => o.value === saved)) {
+        levelSel.value = saved;
+      }
+    } catch { /* private mode → skip restore */ }
+    levelSel.addEventListener("change", () => {
+      try { localStorage.setItem(LOGS_LEVEL_KEY, levelSel.value); } catch {}
+      _renderLogLines();
+    });
+  }
 }
 
 function stopLogsFollow() {
@@ -3460,13 +3509,63 @@ async function refreshManageLogs() {
     const r = await fetch(`/api/logs/${encodeURIComponent(sel.value)}?tail=${n}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
-    meta.textContent = `${data.lines.length} lines · ${formatBytes(data.size)} · ` +
-                       new Date(data.mtime * 1000).toLocaleString();
-    viewer.innerHTML = data.lines.map(renderLogLine).join("");
-    viewer.scrollTop = viewer.scrollHeight;
+    _logsLastLines = data.lines;
+    meta.dataset.totalLines = String(data.lines.length);
+    meta.dataset.size = String(data.size);
+    meta.dataset.mtime = String(data.mtime);
+    _renderLogLines();
   } catch (e) {
+    _logsLastLines = [];
     viewer.innerHTML = `<span class="hint-text">Failed to load: ${escapeHtml(e.message)}</span>`;
   }
+}
+
+// Re-render the cached lines through the active level filter.
+//
+// The minimum-level dropdown lets users hide low-importance noise without
+// re-fetching. Lines whose JSON body has a recognised `level` field are
+// kept iff their rank ≥ threshold. Lines without a parsed level (raw or
+// non-JSON) are only shown when the filter is "ALL" — they have no level
+// to compare, and surfacing them in a "WARNING+" view would be misleading.
+function _renderLogLines() {
+  const viewer = document.getElementById("logsViewer");
+  const meta   = document.getElementById("logsMeta");
+  const sel    = document.getElementById("logsLevel");
+  if (!viewer) return;
+
+  const minLevel = (sel && sel.value) || "ALL";
+  const minRank  = LOG_LEVEL_RANK[minLevel] ?? null;
+
+  let kept;
+  if (minRank == null) {
+    kept = _logsLastLines;
+  } else {
+    kept = _logsLastLines.filter(line => {
+      if (!line || !line.startsWith("{")) return false;
+      try {
+        const lvl = String(JSON.parse(line).level || "").toUpperCase();
+        const rank = LOG_LEVEL_RANK[lvl];
+        return rank != null && rank >= minRank;
+      } catch { return false; }
+    });
+  }
+
+  if (meta) {
+    const total = Number(meta.dataset.totalLines || _logsLastLines.length);
+    const size  = Number(meta.dataset.size  || 0);
+    const mtime = Number(meta.dataset.mtime || 0);
+    const counter = (kept.length === total)
+      ? `${total} lines`
+      : `${kept.length} of ${total} lines`;
+    meta.textContent = `${counter} · ${formatBytes(size)} · ` +
+                       new Date(mtime * 1000).toLocaleString();
+  }
+  if (!kept.length) {
+    viewer.innerHTML = `<span class="hint-text">No lines at this level.</span>`;
+    return;
+  }
+  viewer.innerHTML = kept.map(renderLogLine).join("");
+  viewer.scrollTop = viewer.scrollHeight;
 }
 
 // Render one log line. Booki writes JSON-formatted log records by default
@@ -5806,6 +5905,22 @@ const JOB_HELP = {
   "doctor-platform": {
     title: "System info",
     body: "Operating system + kernel version, the Python interpreter running booki, and the package manager the Doctor will use to suggest install commands for any missing dependencies (brew, apt, dnf, pacman, winget, choco, scoop — pip is the universal fallback).",
+  },
+  "logs-file": {
+    title: "Log file",
+    body: "Pick which log file to view. Booki writes a few rotating files (web, sync, ingest, manager). The dropdown is sorted by recency; the size next to each name lets you spot the active one at a glance.",
+  },
+  "logs-tail": {
+    title: "Tail length",
+    body: "How many trailing lines to fetch from the chosen file. Capped at 5000 so a runaway log can't OOM the browser. Increase if you need to scroll back further; the rest of the file is untouched on disk.",
+  },
+  "logs-level": {
+    title: "Minimum level",
+    body: "Show only lines at or above the selected level (DEBUG ≤ INFO ≤ WARNING ≤ ERROR ≤ CRITICAL). Filtering is client-side over the already-fetched tail — switching levels is instant and won't re-hit the server. Lines without a recognised JSON level are only shown in the 'all' view.",
+  },
+  "logs-follow": {
+    title: "Follow",
+    body: "Auto-refreshes the tail every 2 seconds so new lines stream in. Useful while a sync or ingest is running. Untoggle to pause; the viewer keeps the last loaded snapshot.",
   },
 };
 

@@ -785,6 +785,13 @@ a:hover { text-decoration: underline; }
   font-size: 12px;
 }
 .logs-toolbar input[type="number"] { width: 80px; }
+/* Group each labeled control + its `?` help icon so they don't get
+   separated by the toolbar's flex-gap. */
+.logs-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 .logs-viewer {
   background: #05060a;
   border: 1px solid var(--border);
