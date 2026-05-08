@@ -62,56 +62,75 @@ class CheckResult:
     install: dict = field(default_factory=dict)
     fix_command: Optional[str] = None
     docs_url: Optional[str] = None
+    # Project homepage. Rendered as a small ↗ link next to the package label
+    # so users can click through without leaving the Doctor.
+    homepage: Optional[str] = None
 
 
-# (id, label, dist name, import name, feature, required, install per-pm)
+# (id, label, dist name, import name, feature, required, install per-pm,
+#  homepage)
 # install dict keys map to package-manager identifiers from _detect_pm().
 # `pip` is always the universal fallback.
+# `homepage` surfaces in the Doctor as a small ↗ link next to the label.
 PYTHON_PACKAGES: list[tuple] = [
     ("py-requests", "requests", "requests", "requests",
      "HTTP fetches in sync, enrich, download", True,
-     {"pip": "pip install 'requests>=2.31.0'"}),
+     {"pip": "pip install 'requests>=2.31.0'"},
+     "https://requests.readthedocs.io/"),
     ("py-trafilatura", "trafilatura", "trafilatura", "trafilatura",
      "Page-content extraction for `booki sync --enrich`", False,
-     {"pip": "pip install 'trafilatura>=1.12.0'"}),
+     {"pip": "pip install 'trafilatura>=1.12.0'"},
+     "https://trafilatura.readthedocs.io/"),
     ("py-chromadb", "chromadb", "chromadb", "chromadb",
      "Local vector index for semantic search (booki ingest / Ask) — optional", False,
-     {"pip": "pip install 'chromadb>=0.5.0'"}),
+     {"pip": "pip install 'chromadb>=0.5.0'"},
+     "https://www.trychroma.com/"),
     ("py-sentence-transformers", "sentence-transformers",
      "sentence-transformers", "sentence_transformers",
      "Local embeddings (embeddings.provider = 'local')", False,
-     {"pip": "pip install 'sentence-transformers>=2.2.0'"}),
+     {"pip": "pip install 'sentence-transformers>=2.2.0'"},
+     "https://sbert.net/"),
     ("py-anthropic", "anthropic", "anthropic", "anthropic",
      "Claude LLM provider (llm.provider = 'claude')", False,
-     {"pip": "pip install 'anthropic>=0.30.0'"}),
+     {"pip": "pip install 'anthropic>=0.30.0'"},
+     "https://github.com/anthropics/anthropic-sdk-python"),
     ("py-openai", "openai", "openai", "openai",
      "OpenAI LLM / embeddings (provider = 'openai')", False,
-     {"pip": "pip install 'openai>=1.0.0'"}),
+     {"pip": "pip install 'openai>=1.0.0'"},
+     "https://github.com/openai/openai-python"),
     ("py-fastapi", "fastapi", "fastapi", "fastapi",
      "Web UI server (this app)", True,
-     {"pip": "pip install 'fastapi>=0.110.0'"}),
+     {"pip": "pip install 'fastapi>=0.110.0'"},
+     "https://fastapi.tiangolo.com/"),
     ("py-uvicorn", "uvicorn", "uvicorn", "uvicorn",
      "ASGI server for the web UI", True,
-     {"pip": "pip install 'uvicorn[standard]>=0.27.0'"}),
+     {"pip": "pip install 'uvicorn[standard]>=0.27.0'"},
+     "https://www.uvicorn.org/"),
     ("py-pydantic", "pydantic", "pydantic", "pydantic",
      "Request / response models for the web UI", True,
-     {"pip": "pip install 'pydantic>=2.5.0'"}),
+     {"pip": "pip install 'pydantic>=2.5.0'"},
+     "https://docs.pydantic.dev/"),
     ("py-jinja2", "jinja2", "jinja2", "jinja2",
      "Themed HTML exports (link_page exporter)", False,
-     {"pip": "pip install 'jinja2>=3.1.0'"}),
+     {"pip": "pip install 'jinja2>=3.1.0'"},
+     "https://jinja.palletsprojects.com/"),
     ("py-pyyaml", "pyyaml", "pyyaml", "yaml",
      "Saved export configs (.yaml)", False,
-     {"pip": "pip install 'pyyaml>=6.0'"}),
+     {"pip": "pip install 'pyyaml>=6.0'"},
+     "https://pyyaml.org/"),
     ("py-yt-dlp", "yt-dlp", "yt-dlp", "yt_dlp",
      "Video / audio downloads (booki download)", False,
-     {"pip": "pip install 'yt-dlp>=2024.8.0'"}),
+     {"pip": "pip install 'yt-dlp>=2024.8.0'"},
+     "https://github.com/yt-dlp/yt-dlp"),
     ("py-google-api", "google-api-python-client",
      "google-api-python-client", "googleapiclient",
      "YouTube source ([sources.youtube])", False,
-     {"pip": "pip install google-api-python-client google-auth-oauthlib"}),
+     {"pip": "pip install google-api-python-client google-auth-oauthlib"},
+     "https://github.com/googleapis/google-api-python-client"),
     ("py-feedparser", "feedparser", "feedparser", "feedparser",
      "RSS source ([sources.rss])", False,
-     {"pip": "pip install 'feedparser>=6.0.0'"}),
+     {"pip": "pip install 'feedparser>=6.0.0'"},
+     "https://feedparser.readthedocs.io/"),
 ]
 
 
@@ -143,7 +162,10 @@ BINARIES: list[tuple] = [
 # ─── Runners ──────────────────────────────────────────────────────────────────
 
 def _check_python_pkg(entry: tuple, pm: str) -> CheckResult:
-    cid, label, dist, imp, feature, required, install = entry
+    # Backwards-compatible unpacking — older callers may still pass a 7-tuple
+    # (without homepage). The Doctor row just won't render the ↗ link.
+    cid, label, dist, imp, feature, required, install, *rest = entry
+    homepage = rest[0] if rest else None
     detail = ""
     ok = False
     try:
@@ -161,6 +183,7 @@ def _check_python_pkg(entry: tuple, pm: str) -> CheckResult:
         id=cid, category="Python packages", label=label, feature=feature,
         required=required, ok=ok, detail=detail,
         install=install, fix_command=fix,
+        homepage=homepage,
     )
 
 

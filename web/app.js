@@ -3735,12 +3735,18 @@ function renderCheckRow(c) {
     `;
   }
 
+  // Python packages get a ↗ link to their project homepage right next to
+  // the label, so users can read more without leaving the Doctor.
+  const homepageLink = c.homepage
+    ? ` <a class="check-homepage" href="${escapeHtml(c.homepage)}" target="_blank" rel="noopener" title="Project homepage">↗</a>`
+    : "";
+
   return `
     <li class="check-row ${c.ok ? "is-ok" : (c.required ? "is-bad" : "is-warn")}">
       ${icon}
       <div class="check-main">
         <div class="check-head">
-          <span class="check-label">${escapeHtml(c.label)}</span>
+          <span class="check-label">${escapeHtml(c.label)}${homepageLink}</span>
           ${tag}
           <span class="check-detail">${escapeHtml(c.detail)}</span>
         </div>
