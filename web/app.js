@@ -579,14 +579,62 @@ function renderItemsTable(host, items, opts = {}) {
   });
 }
 
+// Build the inner HTML for a video tile. Used by the Videos tab's
+// dedicated grid AND by the Search tab's generic grid (so a YouTube link
+// in your search results renders with its poster instead of as a generic
+// favicon tile). Returns { html, dur } so the caller can also wire the
+// img-onerror placeholder swap.
+function _videoTileInnerHtml(b, adv) {
+  const e = b.extras || {};
+  const thumb   = e.youtube_thumbnail || e.photo_thumbnail || "";
+  const dur     = String(e.duration || "");
+  const channel = String(e.channel || "");
+  const thumbHtml = thumb
+    ? `<img loading="lazy" src="${escapeHtml(videoThumbSrcFor(thumb))}" alt="">`
+    : `<span class="video-placeholder">🎬</span>`;
+  const durHtml = dur ? `<span class="video-duration">${escapeHtml(dur)}</span>` : "";
+  const topChip = topFieldChipHtml(b, adv);
+  const html = `
+    <div class="video-thumb">
+      ${thumbHtml}
+      ${durHtml}
+      <div class="tile-actions">${rowActionsHtml(b)}</div>
+    </div>
+    <div class="video-meta">
+      <div class="video-title" title="${escapeHtml(b.title || '')}">${escapeHtml(b.title || "(untitled)")}</div>
+      ${channel
+        ? `<div class="video-channel" title="${escapeHtml(channel)}">${escapeHtml(channel)}</div>`
+        : ""}
+      ${topChip ? `<div class="tile-top">${topChip}</div>` : ""}
+    </div>`;
+  return { html, durHtml };
+}
+
+// On thumbnail load failure, swap to the 🎬 placeholder while preserving
+// the duration overlay. Identical fallback used by both grids.
+function _attachVideoTileFallback(li, durHtml) {
+  const img = li.querySelector("img");
+  if (!img) return;
+  img.addEventListener("error", () => {
+    const tw = li.querySelector(".video-thumb");
+    if (tw) tw.innerHTML = `<span class="video-placeholder">🎬</span>${durHtml}`;
+  });
+}
+
 // Generic favicon/glyph grid for tabs that don't have a specialised
-// thumbnail (Search, Ask). Photos/Videos keep their richer grids.
+// thumbnail (Search, Ask). Photos/Videos keep their richer grids — but
+// video-like items mixed into a generic search result get the same
+// poster-grid treatment as the Videos tab so the visual stays uniform.
 function renderItemsGrid(host, items, opts = {}) {
   const onClick = opts.onClick || ((bm) => openDetail(bm.id));
   const adv = opts.adv;
   host.classList.add("items-host");
   if (!items.length) { host.innerHTML = ""; return; }
   const tiles = items.map(bm => {
+    if (isVideoBookmark(bm)) {
+      const { html } = _videoTileInnerHtml(bm, adv);
+      return `<li class="video-tile" data-id="${escapeHtml(bm.id)}" tabindex="0">${html}</li>`;
+    }
     const kind = bm.kind || "bookmark";
     const glyph = KIND_GLYPH[kind] || "🔖";
     const tags = (bm.tags || []).slice(0, 3)
@@ -611,16 +659,21 @@ function renderItemsGrid(host, items, opts = {}) {
     </li>`;
   }).join("");
   host.innerHTML = `<ul class="items-grid">${tiles}</ul>`;
-  host.querySelectorAll(".g-tile").forEach(tile => {
+  host.querySelectorAll("[data-id]").forEach(tile => {
     const bm = items.find(b => b.id === tile.dataset.id);
-    tile.addEventListener("click", () => bm && onClick(bm));
+    if (!bm) return;
+    tile.addEventListener("click", () => onClick(bm));
     tile.addEventListener("keydown", (e) => {
-      if ((e.key === "Enter" || e.key === " ") && bm) {
+      if ((e.key === "Enter" || e.key === " ")) {
         e.preventDefault();
         if (bm.url && e.key === "Enter") openUrlInNewTab(bm.url);
         else onClick(bm);
       }
     });
+    if (tile.classList.contains("video-tile")) {
+      const { durHtml } = _videoTileInnerHtml(bm, adv);
+      _attachVideoTileFallback(tile, durHtml);
+    }
   });
 }
 
@@ -2748,40 +2801,18 @@ function renderVideoGrid() {
     refreshTabExportButton("videos");
     return;
   }
-  // mode === "grid" — keep existing video-poster grid.
+  // mode === "grid" — bespoke video-poster grid; markup comes from the
+  // same helper used by the Search tab's generic grid so a video item
+  // looks identical regardless of which tab it surfaces on.
   grid.classList.add("video-grid");
   const frag = document.createDocumentFragment();
   for (const b of videos) {
-    const e = b.extras || {};
-    const thumb   = e.youtube_thumbnail || e.photo_thumbnail || "";
-    const dur     = String(e.duration || "");
-    const channel = String(e.channel || "");
-
+    const { html, durHtml } = _videoTileInnerHtml(b, adv);
     const li = document.createElement("li");
     li.className = "video-tile";
     li.tabIndex = 0;
     li.dataset.id = b.id;
-
-    const thumbHtml = thumb
-      ? `<img loading="lazy" src="${escapeHtml(videoThumbSrcFor(thumb))}" alt="">`
-      : `<span class="video-placeholder">🎬</span>`;
-    const durHtml = dur ? `<span class="video-duration">${escapeHtml(dur)}</span>` : "";
-
-    const topChip = topFieldChipHtml(b, adv);
-    li.innerHTML = `
-      <div class="video-thumb">
-        ${thumbHtml}
-        ${durHtml}
-        <div class="tile-actions">${rowActionsHtml(b)}</div>
-      </div>
-      <div class="video-meta">
-        <div class="video-title" title="${escapeHtml(b.title || '')}">${escapeHtml(b.title || "(untitled)")}</div>
-        ${channel
-          ? `<div class="video-channel" title="${escapeHtml(channel)}">${escapeHtml(channel)}</div>`
-          : ""}
-        ${topChip ? `<div class="tile-top">${topChip}</div>` : ""}
-      </div>`;
-
+    li.innerHTML = html;
     li.addEventListener("click", () => openDetail(b.id));
     li.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter" || ev.key === " ") {
@@ -2789,14 +2820,7 @@ function renderVideoGrid() {
         openDetail(b.id);
       }
     });
-
-    const img = li.querySelector("img");
-    if (img) {
-      img.addEventListener("error", () => {
-        const tw = li.querySelector(".video-thumb");
-        if (tw) tw.innerHTML = `<span class="video-placeholder">🎬</span>${durHtml}`;
-      });
-    }
+    _attachVideoTileFallback(li, durHtml);
     frag.appendChild(li);
   }
   grid.innerHTML = "";
