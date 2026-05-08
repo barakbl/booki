@@ -1104,15 +1104,15 @@ function mountAdvancedSearch(host, opts = {}) {
       </summary>
       <div class="adv-grid">
         <div class="adv-group adv-misc">
-          <h4>Sources <span class="hint-text">(any)</span></h4>
+          <h4>Sources <span class="hint-text">(any)</span> ${helpIconHtml("adv-sources")}</h4>
           <div class="chip-picker" data-role="sources"></div>
         </div>
         <div class="adv-group adv-misc" data-role="listsGroup">
-          <h4>Lists <span class="hint-text">(any)</span></h4>
+          <h4>Lists <span class="hint-text">(any)</span> ${helpIconHtml("adv-lists")}</h4>
           <div class="chip-picker" data-role="lists"></div>
         </div>
         <div class="adv-group adv-misc">
-          <h4>Top <span class="hint-text">(field · direction · count)</span></h4>
+          <h4>Top <span class="hint-text">(field · direction · count)</span> ${helpIconHtml("adv-top")}</h4>
           <div class="adv-row adv-top-row">
             <input type="text" class="adv-top-field" data-role="topField"
                    list="${fieldsListId}" placeholder="field…" autocomplete="off"
@@ -1130,7 +1130,7 @@ function mountAdvancedSearch(host, opts = {}) {
           </div>
         </div>
         <div class="adv-group adv-misc">
-          <h4>Other</h4>
+          <h4>Other ${helpIconHtml("adv-other")}</h4>
           <div class="adv-row">
             <label>Importance ≥
               <input type="number" data-role="impMin" min="0" max="10" step="1" placeholder="0">
@@ -3813,9 +3813,12 @@ function copyToClipboard(text, btn) {
 
 function renderStatus(payload) {
   const { platform, checks, summary } = payload;
-  statusEls.platform.textContent =
-    `${platform.system} ${platform.release} · Python ${platform.python} · ` +
-    `package manager: ${platform.package_manager}`;
+  // innerHTML (not textContent) so the help-icon button can hang off the
+  // end of the line; the platform/python/pm fields are server-controlled
+  // strings already, but escape them anyway as a defense-in-depth.
+  const line = `${platform.system} ${platform.release} · Python ${platform.python} · ` +
+               `package manager: ${platform.package_manager}`;
+  statusEls.platform.innerHTML = `${escapeHtml(line)} ${helpIconHtml("doctor-platform")}`;
 
   const pills = [
     `<span class="status-pill ok">✓ ${summary.ok}/${summary.total} installed</span>`,
@@ -5782,6 +5785,27 @@ const JOB_HELP = {
   "--reset": {
     title: "Reset collection (--reset)",
     body: "Wipe the vector collection and re-index every bookmark from scratch. Slow on large libraries — typically only needed after embedding-model changes or index corruption.",
+  },
+  // Advanced-search section help (one entry per group header).
+  "adv-sources": {
+    title: "Sources",
+    body: "Narrow to items from one or more sources (chrome, safari, youtube, …). Click a chip to toggle it; multiple selections behave as 'any of these'. The number on each chip is how many items in this tab use that source.",
+  },
+  "adv-lists": {
+    title: "Lists",
+    body: "Narrow to items in one or more named lists. Lists are managed from the bookmark editor — add chips there and they show up here. The Search tab shows every list; other tabs only surface lists that contain at least one item of their kind, so picks never produce an empty result.",
+  },
+  "adv-top": {
+    title: "Top",
+    body: "Sort by a numeric / date / duration field. Pick the field from the combo, choose Top (largest first) or Bottom (smallest first), and a count to cap the list. The chosen field's value renders as a small chip on each result row so you can see what's being ranked.",
+  },
+  "adv-other": {
+    title: "Other filters",
+    body: "Importance bounds (min and/or max), items with a summary or notes only, and whether to include items already removed upstream — e.g. bookmarks the source plugin no longer reports because they were deleted in Chrome.",
+  },
+  "doctor-platform": {
+    title: "System info",
+    body: "Operating system + kernel version, the Python interpreter running booki, and the package manager the Doctor will use to suggest install commands for any missing dependencies (brew, apt, dnf, pacman, winget, choco, scoop — pip is the universal fallback).",
   },
 };
 
