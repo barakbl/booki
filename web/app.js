@@ -579,6 +579,38 @@ function renderItemsTable(host, items, opts = {}) {
   });
 }
 
+// Build the inner HTML for a photo tile. Mirrors the Videos approach so
+// the Search tab's generic grid can render photos with their thumbnail
+// instead of as a generic favicon tile. Returns { html } — onerror
+// fallback is wired by `_attachPhotoTileFallback`.
+function _photoTileInnerHtml(b, adv) {
+  const direct = isDirectImageUrl(b.url);
+  const imgHtml = direct
+    ? `<img loading="lazy" src="${escapeHtml(imageSrcFor(b.url))}" alt="${escapeHtml(b.title || '')}">`
+    : `<span class="photo-placeholder">🖼</span>`;
+  const topChip = topFieldChipHtml(b, adv);
+  const html = `
+    <div class="photo-thumb">
+      ${imgHtml}
+      <div class="tile-actions">${rowActionsHtml(b)}</div>
+    </div>
+    <div class="photo-meta">
+      <div class="photo-title" title="${escapeHtml(b.title || '')}">${escapeHtml(b.title || "(untitled)")}</div>
+      ${b.importance ? `<div class="photo-imp">★${b.importance}</div>` : ""}
+      ${topChip ? `<div class="tile-top">${topChip}</div>` : ""}
+    </div>`;
+  return { html };
+}
+
+function _attachPhotoTileFallback(li) {
+  const img = li.querySelector("img");
+  if (!img) return;
+  img.addEventListener("error", () => {
+    const thumb = li.querySelector(".photo-thumb");
+    if (thumb) thumb.innerHTML = `<span class="photo-placeholder">🖼</span>`;
+  });
+}
+
 // Build the inner HTML for a video tile. Used by the Videos tab's
 // dedicated grid AND by the Search tab's generic grid (so a YouTube link
 // in your search results renders with its poster instead of as a generic
@@ -635,6 +667,10 @@ function renderItemsGrid(host, items, opts = {}) {
       const { html } = _videoTileInnerHtml(bm, adv);
       return `<li class="video-tile" data-id="${escapeHtml(bm.id)}" tabindex="0">${html}</li>`;
     }
+    if (isPhotoBookmark(bm)) {
+      const { html } = _photoTileInnerHtml(bm, adv);
+      return `<li class="photo-tile" data-id="${escapeHtml(bm.id)}" tabindex="0">${html}</li>`;
+    }
     const kind = bm.kind || "bookmark";
     const glyph = KIND_GLYPH[kind] || "🔖";
     const tags = (bm.tags || []).slice(0, 3)
@@ -673,6 +709,8 @@ function renderItemsGrid(host, items, opts = {}) {
     if (tile.classList.contains("video-tile")) {
       const { durHtml } = _videoTileInnerHtml(bm, adv);
       _attachVideoTileFallback(tile, durHtml);
+    } else if (tile.classList.contains("photo-tile")) {
+      _attachPhotoTileFallback(tile);
     }
   });
 }
@@ -2610,32 +2648,18 @@ function renderPhotoGrid() {
     refreshTabExportButton("photos");
     return;
   }
-  // mode === "grid" — keep the existing photo-thumbnail tile grid.
+  // mode === "grid" — bespoke photo-thumbnail grid; markup comes from
+  // the same helper used by the Search tab's generic grid so a photo
+  // looks identical regardless of which tab it surfaces on.
   grid.classList.add("photo-grid");
   const frag = document.createDocumentFragment();
   for (const b of photos) {
+    const { html } = _photoTileInnerHtml(b, adv);
     const li = document.createElement("li");
     li.className = "photo-tile";
     li.tabIndex = 0;
     li.dataset.id = b.id;
-
-    const direct = isDirectImageUrl(b.url);
-    const imgHtml = direct
-      ? `<img loading="lazy" src="${escapeHtml(imageSrcFor(b.url))}" alt="${escapeHtml(b.title || '')}">`
-      : `<span class="photo-placeholder">🖼</span>`;
-
-    const topChip = topFieldChipHtml(b, adv);
-    li.innerHTML = `
-      <div class="photo-thumb">
-        ${imgHtml}
-        <div class="tile-actions">${rowActionsHtml(b)}</div>
-      </div>
-      <div class="photo-meta">
-        <div class="photo-title" title="${escapeHtml(b.title || '')}">${escapeHtml(b.title || "(untitled)")}</div>
-        ${b.importance ? `<div class="photo-imp">★${b.importance}</div>` : ""}
-        ${topChip ? `<div class="tile-top">${topChip}</div>` : ""}
-      </div>`;
-
+    li.innerHTML = html;
     li.addEventListener("click", () => openDetail(b.id));
     li.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") {
@@ -2643,14 +2667,7 @@ function renderPhotoGrid() {
         openDetail(b.id);
       }
     });
-
-    const img = li.querySelector("img");
-    if (img) {
-      img.addEventListener("error", () => {
-        const thumb = li.querySelector(".photo-thumb");
-        if (thumb) thumb.innerHTML = `<span class="photo-placeholder">🖼</span>`;
-      });
-    }
+    _attachPhotoTileFallback(li);
     frag.appendChild(li);
   }
   grid.innerHTML = "";
