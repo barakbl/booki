@@ -3579,6 +3579,10 @@ function _rerenderAskSources() {
   refreshTabExportButton("ask");
 }
 
+// Clicking the top-left logo jumps back to Search — same affordance as
+// the brand element on most web apps.
+$("brandHome")?.addEventListener("click", () => focusSearch());
+
 // ─── Add link ──────────────────────────────────────────────────────
 
 const addLinkForm = $("addLinkForm");

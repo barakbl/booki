@@ -57,7 +57,25 @@ a:hover { text-decoration: underline; }
   gap: 16px;
 }
 
-.brand { display: flex; align-items: center; gap: 12px; }
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  transition: opacity 120ms;
+}
+.brand:hover { opacity: 0.85; }
+.brand:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
 .brand-mark {
   font-size: 30px;
   line-height: 1;

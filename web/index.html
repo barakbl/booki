@@ -22,19 +22,20 @@
   form-action 'self';
 ">
 <title>Booki — Bookmarks</title>
-<link rel="stylesheet" href="/static/styles.css?v=76">
+<link rel="stylesheet" href="/static/styles.css?v=77">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E📚%3C/text%3E%3C/svg%3E">
 </head>
 <body>
 
 <header class="topbar">
-  <div class="brand">
+  <button type="button" class="brand" id="brandHome"
+          title="Go to Search" aria-label="Go to Search">
     <div class="brand-mark">📚</div>
     <div>
       <h1>Booki</h1>
       <p class="sub" id="countLine">Loading…</p>
     </div>
-  </div>
+  </button>
   <form class="add-link" id="addLinkForm" autocomplete="off">
     <input id="addLinkUrl" type="url" inputmode="url" placeholder="Add link (URL)…"
            autocapitalize="off" autocorrect="off" spellcheck="false">
@@ -262,6 +263,6 @@
 
 <div id="toast" class="toast hidden"></div>
 
-<script src="/static/app.js?v=85"></script>
+<script src="/static/app.js?v=86"></script>
 </body>
 </html>
